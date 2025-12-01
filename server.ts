@@ -85,7 +85,6 @@ async function searchTemplates(query: string) {
   {
     const siteUrl = `https://n8n.io/workflows/?q=${encodeURIComponent(query)}`
     const html = await fetchHtml(siteUrl)
-    // Capturar enlaces con id y slug, absoluto o relativo
     const reWork = /href="(?:https?:\/\/n8n\.io)?\/workflows\/(\d+)-([^"\/]+)[^\"]*"/gi
     let m: RegExpExecArray | null
     while ((m = reWork.exec(html)) && results.length < 5) {
@@ -100,7 +99,7 @@ async function searchTemplates(query: string) {
     }
   }
   if (results.length === 0) {
-    // Fallback 1: buscar id+slug dentro del HTML sin depender de texto de ancla
+    // Fallback 1
     const siteUrl = `https://n8n.io/workflows/?q=${encodeURIComponent(query)}`
     const html = await fetchHtml(siteUrl)
     const reAny = /\/workflows\/(\d+)-([a-zA-Z0-9-]+)/g
@@ -120,7 +119,6 @@ async function searchTemplates(query: string) {
     // Fallback 2: DuckDuckGo
     const url = `https://duckduckgo.com/html/?q=${encodeURIComponent(`site:n8n.io/workflows ${query}`)}`
     const html = await fetchHtml(url)
-    // Capturar enlaces absolutos con id y slug en la URL destino
     const re = /<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi
     let m: RegExpExecArray | null
     while ((m = re.exec(html)) && results.length < 5) {
@@ -140,7 +138,7 @@ async function searchTemplates(query: string) {
       }
     }
   }
-  // Enrich with summary (best-effort)
+  // Enriquecer con summary (best-effort)
   for (let i = 0; i < Math.min(results.length, 3); i++) {
     const r = results[i]
     const html = await fetchHtml(r.url)
@@ -238,7 +236,12 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
   const body = req.body || {}
   const payload = body.payload || {}
   const sessionId = body.sessionId || uuidv4()
-  const text = typeof payload?.text === 'string' ? payload.text : typeof body?.question === 'string' ? body.question : ''
+  const text =
+    typeof payload?.text === 'string'
+      ? payload.text
+      : typeof body?.question === 'string'
+      ? body.question
+      : ''
   if (!text && !('type' in payload)) {
     res.status(400).json({ code: 400, message: 'payload required' })
     return
@@ -252,6 +255,7 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
     const userTextBase = text || JSON.stringify(payload)
     const textQuery = text || ''
     const allMessages: any[] = []
+
     if (payload?.context) {
       const toolStart = {
         role: 'assistant',
@@ -270,10 +274,13 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
         toolName: 'read_workflow_context',
         displayTitle: 'Contexto del workflow leído',
         status: 'completed',
-        updates: [{ type: 'output', data: { nodeType: payload?.context?.activeNodeInfo?.node?.type } }],
+        updates: [
+          { type: 'output', data: { nodeType: payload?.context?.activeNodeInfo?.node?.type } },
+        ],
       }
       allMessages.push(toolDone)
     }
+
     console.log(`[askai:${reqId}] search_docs q=${textQuery}`)
     const searchDocsStart = {
       role: 'assistant',
@@ -343,7 +350,7 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
     const sourcesText = [
       docs.length ? `Docs:\n${docs.map((d) => `- ${d.title} (${d.url})`).join('\n')}` : '',
       forum.length ? `Forum:\n${forum.map((d) => `- ${d.title} (${d.url})`).join('\n')}` : '',
-      // Para templates, NO mostramos la URL original, solo el importUrl en texto
+      // Templates: solo damos contexto de import, sin URL pública
       templates.length
         ? `Templates:\n${templates
             .map((t) => `- ${t.title}\n  Importar: ${t.importUrl}`)
@@ -358,39 +365,47 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
     const wantsTemplates = /\b(template|plantilla|workflow|plantillas|templates)\b/i.test(textQuery)
     console.log(`[askai:${reqId}] wantsTemplates=${wantsTemplates} templates=${templates.length}`)
 
-    // 👉 Si el usuario pide plantillas Y hay resultados, respondemos solo con plantillas en formato bonito
+    // --- RESPUESTA SOLO CON PLANTILLAS (BONITA Y SIN ENLACE PÚBLICO) ---
     if (templates.length && wantsTemplates) {
       const md = templates
         .slice(0, 3)
         .map((t) => {
-          const summary = t.summary ? `\n_${t.summary.slice(0, 160)}..._` : '_Workflow listo para usar._'
-          return `### 📄 ${t.title}${summary}\n\n➡️ **[⬇️ Importar en tu n8n](${t.importUrl})**`
+          const summary = t.summary
+            ? `\n_${t.summary.slice(0, 160)}..._`
+            : '_Workflow listo para usar._'
+          return `**${t.title}**${summary}\n\n➡️ **[⬇️ Importar en tu n8n](${t.importUrl})**`
         })
         .join('\n\n---\n\n')
 
       const blockMsg = {
+        id: uuidv4(),
         role: 'assistant' as const,
         type: 'block' as const,
         title: 'Plantillas encontradas',
         content: md,
+        read: false,
       }
+
       const guideMsg = {
+        id: uuidv4(),
         role: 'assistant' as const,
-        type: 'message' as const,
-        text:
+        type: 'text' as const,
+        content:
           'He encontrado estas plantillas. Haz clic en **⬇️ Importar en tu n8n** para añadirlas a tu instancia.',
         quickReplies: [
           { type: 'new-suggestion', text: 'Buscar más plantillas' },
           { type: 'resolved', text: 'Listo, gracias', isFeedback: true },
         ],
+        read: false,
       }
+
       const line = { sessionId, messages: [...allMessages, blockMsg, guideMsg] }
       console.log(`[askai:${reqId}] respond templates-only messages=${line.messages.length}`)
       res.json(line)
       return
     }
 
-    // 👉 Respuesta normal (no es búsqueda de plantillas, o no se encontraron)
+    // --- RESPUESTA GENERAL (NO PIDE PLANTILLAS) ---
     const r = await anthropic.messages.create({
       model: ANTHROPIC_MODEL,
       max_tokens: 1024,
@@ -400,16 +415,12 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
     })
     const raw = r.content?.map((c: any) => ('text' in c ? c.text : '')).join('\n') || ''
 
-    // ❌ AQUÍ ANTES SIEMPRE AÑADÍAS PLANTILLAS SI templates.length > 0
-    // if (templates.length) { ... }
-    // 🔥 Eso hacía que siempre saliera el bloque de "Para importar una plantilla..."
-    // 🧹 Lo eliminamos para que SOLO se muestren plantillas cuando wantsTemplates = true (arriba).
-
     const blocks: any[] = []
     const re = /```([\w+-]*)\n([\s\S]*?)```/g
     let lastIndex = 0
     let m: RegExpExecArray | null
     const codeMatches: Array<{ lang: string; code: string }> = []
+
     while ((m = re.exec(raw)) !== null) {
       const pre = raw.slice(lastIndex, m.index).trim()
       if (pre) blocks.push({ role: 'assistant', type: 'text', content: pre })
@@ -420,19 +431,25 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
       codeMatches.push({ lang, code })
       lastIndex = re.lastIndex
     }
+
     const post = raw.slice(lastIndex).trim()
     if (post) blocks.push({ role: 'assistant', type: 'text', content: post })
     if (blocks.length === 0) {
       blocks.push({ role: 'assistant', type: 'text', content: raw.trim() })
     }
+
     const quickReplies = [
       { type: 'new-suggestion', text: 'Dame otra solución' },
       { type: 'resolved', text: 'Sí, gracias', isFeedback: true },
     ]
 
-    const nodeParams = (payload?.context?.activeNodeInfo?.node?.parameters || payload?.workflowContext?.activeNodeInfo?.node?.parameters || undefined) as any
+    const nodeParams = (payload?.context?.activeNodeInfo?.node?.parameters ||
+      payload?.workflowContext?.activeNodeInfo?.node?.parameters ||
+      undefined) as any
+
     const oldCode = typeof nodeParams?.jsCode === 'string' ? nodeParams.jsCode : undefined
     let preferredNewCode = ''
+
     if (codeMatches.length > 0) {
       const nodeLangRaw = String((nodeParams?.language ?? '')).toLowerCase()
       const prefersPython = nodeLangRaw.includes('python')
@@ -445,7 +462,8 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
         : prefersJs
         ? ['javascript', 'js', 'typescript', 'ts', 'python', 'text']
         : ['javascript', 'js', 'typescript', 'ts', 'python', 'text']
-      const preferred = codeMatches.find((c) => order.includes(c.lang.toLowerCase())) || codeMatches[0]
+      const preferred =
+        codeMatches.find((c) => order.includes(c.lang.toLowerCase())) || codeMatches[0]
       preferredNewCode = preferred.code
     }
 
@@ -458,13 +476,20 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
         status: 'running',
       }
       allMessages.push(progressStart)
+
       const oldLines = oldCode.split('\n')
       const newLines = preferredNewCode.split('\n')
       let diff = `@@ -1,${oldLines.length} +1,${newLines.length} @@\n`
       for (const l of oldLines) diff += `-${l}\n`
       for (const l of newLines) diff += `+${l}\n`
+
       const suggestionId = uuidv4()
-      suggestionsStore.set(suggestionId, { sessionId, original: oldCode, proposed: preferredNewCode })
+      suggestionsStore.set(suggestionId, {
+        sessionId,
+        original: oldCode,
+        proposed: preferredNewCode,
+      })
+
       const codeDiffMsg: any = {
         role: 'assistant',
         type: 'code-diff',
@@ -474,6 +499,7 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
         quickReplies,
       }
       blocks.push(codeDiffMsg)
+
       const progressDone = {
         role: 'assistant',
         type: 'tool',
@@ -484,8 +510,9 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
       allMessages.push(progressDone)
     } else {
       const last = blocks[blocks.length - 1]
-      if (last) last.quickReplies = quickReplies
+      if (last) (last as any).quickReplies = quickReplies
     }
+
     const line = { sessionId, messages: [...allMessages, ...blocks] }
     console.log(`[askai:${reqId}] respond general messages=${line.messages.length}`)
     res.json(line)
