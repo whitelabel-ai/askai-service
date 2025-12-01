@@ -423,7 +423,7 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
 
         return {
           role: 'assistant',
-          type: 'block',
+          type: 'summary',
           title: `📄 ${t.title}`,
           content,
         }
