@@ -356,22 +356,29 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
     console.log(`[askai:${reqId}] wantsTemplates=${wantsTemplates} templates=${templates.length}`)
     if (templates.length && wantsTemplates) {
       const md = templates
+        .slice(0, 3)
         .map((t) => {
-          const summary = t.summary ? `\n  _${t.summary.slice(0, 160)}..._` : ''
-          return `- [${t.title}](${t.url})\n  [Importar](${t.importUrl})${summary}`
+          const summary = t.summary ? `\n_${t.summary.slice(0, 160)}..._` : ''
+          return `### 📄 [${t.title}](${t.url})${summary}\n\n**[⬇️ Importar en tu n8n](${t.importUrl})**`
         })
-        .join('\n\n')
+        .join('\n\n---\n\n')
       const blockMsg = {
         role: 'assistant' as const,
         type: 'block' as const,
         title: 'Plantillas encontradas',
         content: md,
+      }
+      const guideMsg = {
+        role: 'assistant' as const,
+        type: 'message' as const,
+        text:
+          'He encontrado estas plantillas. Haz clic en **Importar** para añadirlas a tu workflow.',
         quickReplies: [
           { type: 'new-suggestion', text: 'Buscar más plantillas' },
           { type: 'resolved', text: 'Listo, gracias', isFeedback: true },
         ],
       }
-      const line = { sessionId, messages: [...allMessages, blockMsg] }
+      const line = { sessionId, messages: [...allMessages, blockMsg, guideMsg] }
       console.log(`[askai:${reqId}] respond templates-only messages=${line.messages.length}`)
       res.json(line)
       return
