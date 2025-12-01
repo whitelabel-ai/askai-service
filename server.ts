@@ -80,21 +80,49 @@ async function searchForum(query: string) {
 }
 
 async function searchTemplates(query: string) {
-  const url = `https://duckduckgo.com/html/?q=${encodeURIComponent(`site:n8n.io/workflows ${query}`)}`
-  const html = await fetchHtml(url)
   const results: Array<{ id: string; title: string; url: string; importUrl: string }> = []
-  const re = /<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi
-  let m: RegExpExecArray | null
-  while ((m = re.exec(html)) && results.length < 3) {
-    let href = m[1]
-    const title = m[2].replace(/<[^>]+>/g, '').trim()
-    const u = href.match(/uddg=([^&]+)/)
-    if (u) href = decodeURIComponent(u[1])
-    const idMatch = href.match(/\/workflows\/(\d+)/)
-    if (!idMatch) continue
-    const id = idMatch[1]
-    const importUrl = `https://automation.whitelabel.lat/templates/${id}/setup`
-    results.push({ id, title, url: href, importUrl })
+  // Try site search page first
+  {
+    const siteUrl = `https://n8n.io/workflows/?q=${encodeURIComponent(query)}`
+    const html = await fetchHtml(siteUrl)
+    const reAbs = /href="https?:\/\/n8n\.io\/workflows\/(\d+)[^"]*"[^>]*>([^<]+)<\/a>/gi
+    const reRel = /href="\/workflows\/(\d+)[^"]*"[^>]*>([^<]+)<\/a>/gi
+    let m: RegExpExecArray | null
+    while ((m = reAbs.exec(html)) && results.length < 3) {
+      const id = m[1]
+      const title = m[2].trim()
+      const url = `https://n8n.io/workflows/${id}`
+      const importUrl = `https://automation.whitelabel.lat/templates/${id}/setup`
+      results.push({ id, title, url, importUrl })
+    }
+    while ((m = reRel.exec(html)) && results.length < 3) {
+      const id = m[1]
+      const title = m[2].trim()
+      const url = `https://n8n.io/workflows/${id}`
+      const importUrl = `https://automation.whitelabel.lat/templates/${id}/setup`
+      // Avoid duplicates
+      if (!results.find((r) => r.id === id)) {
+        results.push({ id, title, url, importUrl })
+      }
+    }
+  }
+  if (results.length === 0) {
+    // Fallback to DuckDuckGo
+    const url = `https://duckduckgo.com/html/?q=${encodeURIComponent(`site:n8n.io/workflows ${query}`)}`
+    const html = await fetchHtml(url)
+    const re = /<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi
+    let m: RegExpExecArray | null
+    while ((m = re.exec(html)) && results.length < 3) {
+      let href = m[1]
+      const title = m[2].replace(/<[^>]+>/g, '').trim()
+      const u = href.match(/uddg=([^&]+)/)
+      if (u) href = decodeURIComponent(u[1])
+      const idMatch = href.match(/\/workflows\/(\d+)/)
+      if (!idMatch) continue
+      const id = idMatch[1]
+      const importUrl = `https://automation.whitelabel.lat/templates/${id}/setup`
+      results.push({ id, title, url: href, importUrl })
+    }
   }
   return results
 }
@@ -291,6 +319,26 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
       .filter(Boolean)
       .join('\n\n')
     const userText = sourcesText ? `${userTextBase}\n\nFuentes:\n${sourcesText}` : userTextBase
+    const wantsTemplates = /\b(template|plantilla|workflow|plantillas|templates)\b/i.test(text || '')
+    if (templates.length && wantsTemplates) {
+      const pretty = templates
+        .map(
+          (t) => `• ${t.title}\n  Ver: ${t.url}\n  Importar: ${t.importUrl}`,
+        )
+        .join('\n\n')
+      const tplMsg = {
+        role: 'assistant',
+        type: 'message',
+        text: `Plantillas encontradas:\n\n${pretty}`,
+        quickReplies: [
+          { type: 'new-suggestion', text: 'Buscar más plantillas' },
+          { type: 'resolved', text: 'Listo, gracias', isFeedback: true },
+        ],
+      }
+      const line = { sessionId, messages: [...allMessages, tplMsg] }
+      res.json(line)
+      return
+    }
     const r = await anthropic.messages.create({
       model: ANTHROPIC_MODEL,
       max_tokens: 1024,
