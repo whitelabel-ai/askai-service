@@ -104,6 +104,42 @@ app.post('/v1/ask-ai', verifyAuth, async (req, res) => {
   }
 })
 
+app.post('/v1/chat', verifyAuth, async (req, res) => {
+  const reqId = (req as any).reqId || '-'
+  const body = req.body || {}
+  const payload = body.payload || {}
+  const sessionId = body.sessionId || uuidv4()
+  const text = typeof payload?.text === 'string' ? payload.text : typeof body?.question === 'string' ? body.question : ''
+  if (!text && !('type' in payload)) {
+    res.status(400).json({ code: 400, message: 'payload required' })
+    return
+  }
+  if (!ANTHROPIC_KEY) {
+    res.status(500).json({ code: 500, message: 'Service misconfigured: ANTHROPIC key missing' })
+    return
+  }
+  res.setHeader('Content-Type', 'application/json-lines')
+  try {
+    const userText = text || JSON.stringify(payload)
+    const r = await anthropic.messages.create({
+      model: ANTHROPIC_MODEL,
+      max_tokens: 1024,
+      messages: [{ role: 'user', content: userText }],
+    })
+    const raw = r.content?.map((c: any) => ('text' in c ? c.text : '')).join('\n') || ''
+    const line = { sessionId, messages: [{ role: 'assistant', type: 'message', text: raw }] }
+    res.write(JSON.stringify(line) + '\n')
+    res.end()
+  } catch (e: any) {
+    const msg = e?.message || 'Chat failed'
+    const status = e?.status || e?.statusCode || 500
+    const line = { sessionId, messages: [{ role: 'assistant', type: 'error', content: msg }] }
+    res.write(JSON.stringify(line) + '\n')
+    res.end()
+    console.log(`[askai:${reqId}] chat error status=${status} message=${msg}`)
+  }
+})
+
 const port = process.env.PORT ? Number(process.env.PORT) : 8080
 app.get('/healthz', (_req, res) => {
   res.json({ ok: true })
