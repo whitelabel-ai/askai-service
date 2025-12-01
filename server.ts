@@ -122,13 +122,6 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
   res.setHeader('Content-Type', 'application/json-lines')
   try {
     const userText = text || JSON.stringify(payload)
-    const progressContextStart = {
-      sessionId,
-      messages: [
-        { role: 'assistant', type: 'tool', displayTitle: 'Analizando contexto', toolName: 'context_analysis', status: 'running' },
-      ],
-    }
-    res.write(JSON.stringify(progressContextStart) + '\n')
     const r = await anthropic.messages.create({
       model: ANTHROPIC_MODEL,
       max_tokens: 1024,
@@ -136,13 +129,6 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
       messages: [{ role: 'user', content: userText }],
     })
     const raw = r.content?.map((c: any) => ('text' in c ? c.text : '')).join('\n') || ''
-    const progressContextDone = {
-      sessionId,
-      messages: [
-        { role: 'assistant', type: 'tool', displayTitle: 'Contexto analizado', toolName: 'context_analysis', status: 'completed' },
-      ],
-    }
-    res.write(JSON.stringify(progressContextDone) + '\n')
     const blocks: any[] = []
     const re = /```([\w+-]*)\n([\s\S]*?)```/g
     let lastIndex = 0
@@ -172,13 +158,6 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
     const oldCode = typeof nodeParams?.jsCode === 'string' ? nodeParams.jsCode : undefined
     let preferredNewCode = ''
     if (codeMatches.length > 0) {
-      const progressLangStart = {
-        sessionId,
-        messages: [
-          { role: 'assistant', type: 'tool', displayTitle: 'Seleccionando lenguaje preferido', toolName: 'language_selection', status: 'running' },
-        ],
-      }
-      res.write(JSON.stringify(progressLangStart) + '\n')
       const nodeLangRaw = String((nodeParams?.language ?? '')).toLowerCase()
       const prefersPython = nodeLangRaw.includes('python')
       const prefersTs = nodeLangRaw.includes('typescript') || nodeLangRaw.includes('ts')
@@ -192,13 +171,6 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
         : ['javascript', 'js', 'typescript', 'ts', 'python', 'text']
       const preferred = codeMatches.find((c) => order.includes(c.lang.toLowerCase())) || codeMatches[0]
       preferredNewCode = preferred.code
-      const progressLangDone = {
-        sessionId,
-        messages: [
-          { role: 'assistant', type: 'tool', displayTitle: 'Lenguaje seleccionado', toolName: 'language_selection', status: 'completed' },
-        ],
-      }
-      res.write(JSON.stringify(progressLangDone) + '\n')
     }
 
     if (oldCode && preferredNewCode) {
