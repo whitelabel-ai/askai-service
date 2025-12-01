@@ -224,6 +224,7 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
   res.setHeader('Content-Type', 'application/json')
   try {
     const userTextBase = text || JSON.stringify(payload)
+    const textQuery = text || ''
     const allMessages: any[] = []
     if (payload?.context) {
       const toolStart = {
@@ -247,16 +248,18 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
       }
       allMessages.push(toolDone)
     }
+    console.log(`[askai:${reqId}] search_docs q=${textQuery}`)
     const searchDocsStart = {
       role: 'assistant',
       type: 'tool',
       toolName: 'search_docs',
       displayTitle: 'Buscando en documentación de n8n',
       status: 'running',
-      updates: [{ type: 'input', data: { query: userTextBase } }],
+      updates: [{ type: 'input', data: { query: textQuery } }],
     }
     allMessages.push(searchDocsStart)
-    const docs = await searchDocs(userTextBase)
+    const docs = await searchDocs(textQuery)
+    console.log(`[askai:${reqId}] search_docs results=${docs.length}`)
     const searchDocsDone = {
       role: 'assistant',
       type: 'tool',
@@ -267,16 +270,18 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
     }
     allMessages.push(searchDocsDone)
 
+    console.log(`[askai:${reqId}] search_forum q=${textQuery}`)
     const searchForumStart = {
       role: 'assistant',
       type: 'tool',
       toolName: 'search_forum',
       displayTitle: 'Buscando en foro de la comunidad',
       status: 'running',
-      updates: [{ type: 'input', data: { query: userTextBase } }],
+      updates: [{ type: 'input', data: { query: textQuery } }],
     }
     allMessages.push(searchForumStart)
-    const forum = await searchForum(userTextBase)
+    const forum = await searchForum(textQuery)
+    console.log(`[askai:${reqId}] search_forum results=${forum.length}`)
     const searchForumDone = {
       role: 'assistant',
       type: 'tool',
@@ -287,16 +292,18 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
     }
     allMessages.push(searchForumDone)
 
+    console.log(`[askai:${reqId}] search_templates q=${textQuery}`)
     const searchTemplatesStart = {
       role: 'assistant',
       type: 'tool',
       toolName: 'search_templates',
       displayTitle: 'Buscando plantillas de workflows',
       status: 'running',
-      updates: [{ type: 'input', data: { query: userTextBase } }],
+      updates: [{ type: 'input', data: { query: textQuery } }],
     }
     allMessages.push(searchTemplatesStart)
-    const templates = await searchTemplates(userTextBase)
+    const templates = await searchTemplates(textQuery)
+    console.log(`[askai:${reqId}] search_templates results=${templates.length}`)
     const searchTemplatesDone = {
       role: 'assistant',
       type: 'tool',
@@ -319,7 +326,8 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
       .filter(Boolean)
       .join('\n\n')
     const userText = sourcesText ? `${userTextBase}\n\nFuentes:\n${sourcesText}` : userTextBase
-    const wantsTemplates = /\b(template|plantilla|workflow|plantillas|templates)\b/i.test(text || '')
+    const wantsTemplates = /\b(template|plantilla|workflow|plantillas|templates)\b/i.test(textQuery)
+    console.log(`[askai:${reqId}] wantsTemplates=${wantsTemplates} templates=${templates.length}`)
     if (templates.length && wantsTemplates) {
       const pretty = templates
         .map(
@@ -336,6 +344,7 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
         ],
       }
       const line = { sessionId, messages: [...allMessages, tplMsg] }
+      console.log(`[askai:${reqId}] respond templates-only messages=${line.messages.length}`)
       res.json(line)
       return
     }
@@ -454,6 +463,7 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
       if (last) last.quickReplies = quickReplies
     }
     const line = { sessionId, messages: [...allMessages, ...blocks] }
+    console.log(`[askai:${reqId}] respond general messages=${line.messages.length}`)
     res.json(line)
   } catch (e: any) {
     const msg = e?.message || 'Chat failed'
