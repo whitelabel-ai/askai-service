@@ -25,6 +25,80 @@ const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || 'claude-3-5-sonnet-202410
 const anthropic = new Anthropic({ apiKey: ANTHROPIC_KEY })
 const suggestionsStore = new Map<string, { sessionId: string; proposed: string; original?: string }>()
 
+async function fetchHtml(url: string, timeoutMs = 5000): Promise<string> {
+  const ac = new AbortController()
+  const t = setTimeout(() => ac.abort(), timeoutMs)
+  try {
+    const r = await fetch(url, {
+      signal: ac.signal,
+      headers: {
+        'User-Agent': 'Mozilla/5.0',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9',
+      },
+    })
+    clearTimeout(t)
+    if (!r.ok) return ''
+    return await r.text()
+  } catch {
+    clearTimeout(t)
+    return ''
+  }
+}
+
+async function searchDocs(query: string) {
+  const url = `https://duckduckgo.com/html/?q=${encodeURIComponent(`site:docs.n8n.io ${query}`)}`
+  const html = await fetchHtml(url)
+  const results: Array<{ title: string; url: string }> = []
+  const re = /<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi
+  let m: RegExpExecArray | null
+  while ((m = re.exec(html)) && results.length < 3) {
+    let href = m[1]
+    const title = m[2].replace(/<[^>]+>/g, '').trim()
+    const u = href.match(/uddg=([^&]+)/)
+    if (u) href = decodeURIComponent(u[1])
+    results.push({ title, url: href })
+  }
+  return results
+}
+
+async function searchForum(query: string) {
+  const url = `https://community.n8n.io/search?q=${encodeURIComponent(query)}`
+  const html = await fetchHtml(url)
+  const results: Array<{ title: string; url: string }> = []
+  const seen = new Set<string>()
+  const re = /<a[^>]+href="(\/t\/[^\"]+)"[^>]*>([^<]+)<\/a>/gi
+  let m: RegExpExecArray | null
+  while ((m = re.exec(html)) && results.length < 3) {
+    const href = 'https://community.n8n.io' + m[1]
+    const title = m[2].trim()
+    if (!seen.has(href)) {
+      seen.add(href)
+      results.push({ title, url: href })
+    }
+  }
+  return results
+}
+
+async function searchTemplates(query: string) {
+  const url = `https://duckduckgo.com/html/?q=${encodeURIComponent(`site:n8n.io/workflows ${query}`)}`
+  const html = await fetchHtml(url)
+  const results: Array<{ id: string; title: string; url: string; importUrl: string }> = []
+  const re = /<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi
+  let m: RegExpExecArray | null
+  while ((m = re.exec(html)) && results.length < 3) {
+    let href = m[1]
+    const title = m[2].replace(/<[^>]+>/g, '').trim()
+    const u = href.match(/uddg=([^&]+)/)
+    if (u) href = decodeURIComponent(u[1])
+    const idMatch = href.match(/\/workflows\/(\d+)/)
+    if (!idMatch) continue
+    const id = idMatch[1]
+    const importUrl = `https://automation.whitelabel.lat/templates/${id}/setup`
+    results.push({ id, title, url: href, importUrl })
+  }
+  return results
+}
+
 function verifyAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
   const reqId = (req as any).reqId || '-'
   const h = req.headers.authorization || ''
@@ -121,7 +195,7 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
   }
   res.setHeader('Content-Type', 'application/json-lines')
   try {
-    const userText = text || JSON.stringify(payload)
+    const userTextBase = text || JSON.stringify(payload)
     if (payload?.context) {
       const toolStart = {
         sessionId,
@@ -154,77 +228,130 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
       }
       res.write(JSON.stringify(toolDone) + '\n')
     }
-    {
-      const searchDocsStart = {
-        sessionId,
-        messages: [
-          {
-            role: 'assistant',
-            type: 'tool',
-            toolName: 'search_docs',
-            displayTitle: 'Buscando en documentación de n8n',
-            status: 'running',
-            updates: [{ type: 'input', data: { query: text } }],
-          },
-        ],
-      }
-      res.write(JSON.stringify(searchDocsStart) + '\n')
+    const searchDocsStart = {
+      sessionId,
+      messages: [
+        {
+          role: 'assistant',
+          type: 'tool',
+          toolName: 'search_docs',
+          displayTitle: 'Buscando en documentación de n8n',
+          status: 'running',
+          updates: [{ type: 'input', data: { query: userTextBase } }],
+        },
+      ],
     }
-    {
-      const searchForumStart = {
-        sessionId,
-        messages: [
-          {
-            role: 'assistant',
-            type: 'tool',
-            toolName: 'search_forum',
-            displayTitle: 'Buscando en foro de la comunidad',
-            status: 'running',
-            updates: [{ type: 'input', data: { query: text } }],
-          },
-        ],
-      }
-      res.write(JSON.stringify(searchForumStart) + '\n')
+    res.write(JSON.stringify(searchDocsStart) + '\n')
+    const docs = await searchDocs(userTextBase)
+    const searchDocsDone = {
+      sessionId,
+      messages: [
+        {
+          role: 'assistant',
+          type: 'tool',
+          toolName: 'search_docs',
+          displayTitle: 'Documentación consultada',
+          status: 'completed',
+          updates: [{ type: 'output', data: { results: docs } }],
+        },
+      ],
     }
+    res.write(JSON.stringify(searchDocsDone) + '\n')
+
+    const searchForumStart = {
+      sessionId,
+      messages: [
+        {
+          role: 'assistant',
+          type: 'tool',
+          toolName: 'search_forum',
+          displayTitle: 'Buscando en foro de la comunidad',
+          status: 'running',
+          updates: [{ type: 'input', data: { query: userTextBase } }],
+        },
+      ],
+    }
+    res.write(JSON.stringify(searchForumStart) + '\n')
+    const forum = await searchForum(userTextBase)
+    const searchForumDone = {
+      sessionId,
+      messages: [
+        {
+          role: 'assistant',
+          type: 'tool',
+          toolName: 'search_forum',
+          displayTitle: 'Foro consultado',
+          status: 'completed',
+          updates: [{ type: 'output', data: { results: forum } }],
+        },
+      ],
+    }
+    res.write(JSON.stringify(searchForumDone) + '\n')
+
+    const searchTemplatesStart = {
+      sessionId,
+      messages: [
+        {
+          role: 'assistant',
+          type: 'tool',
+          toolName: 'search_templates',
+          displayTitle: 'Buscando plantillas de workflows',
+          status: 'running',
+          updates: [{ type: 'input', data: { query: userTextBase } }],
+        },
+      ],
+    }
+    res.write(JSON.stringify(searchTemplatesStart) + '\n')
+    const templates = await searchTemplates(userTextBase)
+    const searchTemplatesDone = {
+      sessionId,
+      messages: [
+        {
+          role: 'assistant',
+          type: 'tool',
+          toolName: 'search_templates',
+          displayTitle: 'Plantillas consultadas',
+          status: 'completed',
+          updates: [{ type: 'output', data: { results: templates } }],
+        },
+      ],
+    }
+    res.write(JSON.stringify(searchTemplatesDone) + '\n')
+
+    const sourcesText = [
+      docs.length ? `Docs:\n${docs.map((d) => `- ${d.title} (${d.url})`).join('\n')}` : '',
+      forum.length ? `Forum:\n${forum.map((d) => `- ${d.title} (${d.url})`).join('\n')}` : '',
+      templates.length
+        ? `Templates:\n${templates
+            .map((t) => `- ${t.title} (${t.url})\n  Importar: ${t.importUrl}`)
+            .join('\n')}`
+        : '',
+    ]
+      .filter(Boolean)
+      .join('\n\n')
+    const userText = sourcesText ? `${userTextBase}\n\nFuentes:\n${sourcesText}` : userTextBase
     const r = await anthropic.messages.create({
       model: ANTHROPIC_MODEL,
       max_tokens: 1024,
       system: 'Eres un asistente de n8n. Cuando incluyas código, usa bloques con triple acento grave separados por sección y especifica el lenguaje, por ejemplo ```javascript ... ``` o ```sql ... ```, etc...',
       messages: [{ role: 'user', content: userText }],
     })
-    {
-      const searchDocsDone = {
-        sessionId,
-        messages: [
-          {
-            role: 'assistant',
-            type: 'tool',
-            toolName: 'search_docs',
-            displayTitle: 'Documentación consultada',
-            status: 'completed',
-            updates: [{ type: 'output', data: { sources: ['docs'] } }],
-          },
-        ],
-      }
-      res.write(JSON.stringify(searchDocsDone) + '\n')
-    }
-    {
-      const searchForumDone = {
-        sessionId,
-        messages: [
-          {
-            role: 'assistant',
-            type: 'tool',
-            toolName: 'search_forum',
-            displayTitle: 'Foro consultado',
-            status: 'completed',
-            updates: [{ type: 'output', data: { sources: ['forum'] } }],
-          },
-        ],
-      }
-      res.write(JSON.stringify(searchForumDone) + '\n')
-    }
     const raw = r.content?.map((c: any) => ('text' in c ? c.text : '')).join('\n') || ''
+    if (templates.length) {
+      const md = templates
+        .map(
+          (t) => `- [${t.title}](${t.url})  \\n+  Importar en tu instancia: [Abrir](${t.importUrl})`,
+        )
+        .join('\n')
+      const blockMsg = {
+        role: 'assistant',
+        type: 'block',
+        title: 'Plantillas encontradas',
+        content: md,
+      }
+      const lineBlock = { sessionId, messages: [blockMsg] }
+      res.write(JSON.stringify(lineBlock) + '\n')
+    }
     const blocks: any[] = []
     const re = /```([\w+-]*)\n([\s\S]*?)```/g
     let lastIndex = 0
