@@ -81,47 +81,63 @@ async function searchForum(query: string) {
 
 async function searchTemplates(query: string) {
   const results: Array<{ id: string; title: string; url: string; importUrl: string }> = []
-  // Try site search page first
+  // Intento 1: página de búsqueda del sitio (Next.js)
   {
     const siteUrl = `https://n8n.io/workflows/?q=${encodeURIComponent(query)}`
     const html = await fetchHtml(siteUrl)
-    const reAbs = /href="https?:\/\/n8n\.io\/workflows\/(\d+)[^"]*"[^>]*>([^<]+)<\/a>/gi
-    const reRel = /href="\/workflows\/(\d+)[^"]*"[^>]*>([^<]+)<\/a>/gi
+    // Capturar enlaces con id y slug, absoluto o relativo
+    const reWork = /href="(?:https?:\/\/n8n\.io)?\/workflows\/(\d+)-([^"\/]+)[^\"]*"/gi
     let m: RegExpExecArray | null
-    while ((m = reAbs.exec(html)) && results.length < 3) {
+    while ((m = reWork.exec(html)) && results.length < 5) {
       const id = m[1]
-      const title = m[2].trim()
-      const url = `https://n8n.io/workflows/${id}`
+      const slug = decodeURIComponent(m[2])
+      const title = slug.replace(/-/g, ' ').replace(/\s+/g, ' ').trim()
+      const url = `https://n8n.io/workflows/${id}-${slug}/`
       const importUrl = `https://automation.whitelabel.lat/templates/${id}/setup`
-      results.push({ id, title, url, importUrl })
-    }
-    while ((m = reRel.exec(html)) && results.length < 3) {
-      const id = m[1]
-      const title = m[2].trim()
-      const url = `https://n8n.io/workflows/${id}`
-      const importUrl = `https://automation.whitelabel.lat/templates/${id}/setup`
-      // Avoid duplicates
       if (!results.find((r) => r.id === id)) {
         results.push({ id, title, url, importUrl })
       }
     }
   }
   if (results.length === 0) {
-    // Fallback to DuckDuckGo
+    // Fallback 1: buscar id+slug dentro del HTML sin depender de texto de ancla
+    const siteUrl = `https://n8n.io/workflows/?q=${encodeURIComponent(query)}`
+    const html = await fetchHtml(siteUrl)
+    const reAny = /\/workflows\/(\d+)-([a-zA-Z0-9-]+)/g
+    let m: RegExpExecArray | null
+    while ((m = reAny.exec(html)) && results.length < 5) {
+      const id = m[1]
+      const slug = decodeURIComponent(m[2])
+      const title = slug.replace(/-/g, ' ').replace(/\s+/g, ' ').trim()
+      const url = `https://n8n.io/workflows/${id}-${slug}/`
+      const importUrl = `https://automation.whitelabel.lat/templates/${id}/setup`
+      if (!results.find((r) => r.id === id)) {
+        results.push({ id, title, url, importUrl })
+      }
+    }
+  }
+  if (results.length === 0) {
+    // Fallback 2: DuckDuckGo
     const url = `https://duckduckgo.com/html/?q=${encodeURIComponent(`site:n8n.io/workflows ${query}`)}`
     const html = await fetchHtml(url)
+    // Capturar enlaces absolutos con id y slug en la URL destino
     const re = /<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi
     let m: RegExpExecArray | null
-    while ((m = re.exec(html)) && results.length < 3) {
+    while ((m = re.exec(html)) && results.length < 5) {
       let href = m[1]
-      const title = m[2].replace(/<[^>]+>/g, '').trim()
       const u = href.match(/uddg=([^&]+)/)
       if (u) href = decodeURIComponent(u[1])
-      const idMatch = href.match(/\/workflows\/(\d+)/)
-      if (!idMatch) continue
-      const id = idMatch[1]
+      const idSlug = href.match(/\/workflows\/(\d+)-([a-zA-Z0-9-]+)/)
+      const idOnly = href.match(/\/workflows\/(\d+)/)
+      if (!idSlug && !idOnly) continue
+      const id = idSlug ? idSlug[1] : idOnly![1]
+      const slug = idSlug ? decodeURIComponent(idSlug[2]) : ''
+      const title = slug ? slug.replace(/-/g, ' ').replace(/\s+/g, ' ').trim() : `Workflow ${id}`
+      const urlFinal = idSlug ? `https://n8n.io/workflows/${id}-${slug}/` : `https://n8n.io/workflows/${id}/`
       const importUrl = `https://automation.whitelabel.lat/templates/${id}/setup`
-      results.push({ id, title, url: href, importUrl })
+      if (!results.find((r) => r.id === id)) {
+        results.push({ id, title, url: urlFinal, importUrl })
+      }
     }
   }
   return results
