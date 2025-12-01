@@ -127,7 +127,19 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
       messages: [{ role: 'user', content: userText }],
     })
     const raw = r.content?.map((c: any) => ('text' in c ? c.text : '')).join('\n') || ''
-    const line = { sessionId, messages: [{ role: 'assistant', type: 'message', text: raw }] }
+    const fenced = raw.match(/```[a-zA-Z]*\n([\s\S]*?)```/)
+    const inlineFenced = raw.match(/```([\s\S]*?)```/)
+    const match = fenced || inlineFenced
+    const codeContent = match ? match[1].trim() : ''
+    const textOnly = match ? raw.replace(match[0], '').trim() : raw.trim()
+    const codeSnippet = codeContent ? `\`\`\`javascript\n${codeContent}\n\`\`\`` : undefined
+    const quickReplies = [
+      { type: 'new-suggestion', text: 'Dame otra solución' },
+      { type: 'resolved', text: 'Sí, gracias', isFeedback: true },
+    ]
+    const assistantMsg: any = { role: 'assistant', type: 'message', text: textOnly || 'He generado un código para ti:', quickReplies }
+    if (codeSnippet) (assistantMsg as any).codeSnippet = codeSnippet
+    const line = { sessionId, messages: [assistantMsg] }
     res.write(JSON.stringify(line) + '\n')
     res.end()
   } catch (e: any) {
