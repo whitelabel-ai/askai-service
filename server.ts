@@ -122,6 +122,13 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
   res.setHeader('Content-Type', 'application/json-lines')
   try {
     const userText = text || JSON.stringify(payload)
+    const progressContextStart = {
+      sessionId,
+      messages: [
+        { role: 'assistant', type: 'tool', displayTitle: 'Analizando contexto', toolName: 'context_analysis', status: 'running' },
+      ],
+    }
+    res.write(JSON.stringify(progressContextStart) + '\n')
     const r = await anthropic.messages.create({
       model: ANTHROPIC_MODEL,
       max_tokens: 1024,
@@ -129,6 +136,13 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
       messages: [{ role: 'user', content: userText }],
     })
     const raw = r.content?.map((c: any) => ('text' in c ? c.text : '')).join('\n') || ''
+    const progressContextDone = {
+      sessionId,
+      messages: [
+        { role: 'assistant', type: 'tool', displayTitle: 'Contexto analizado', toolName: 'context_analysis', status: 'completed' },
+      ],
+    }
+    res.write(JSON.stringify(progressContextDone) + '\n')
     const blocks: any[] = []
     const re = /```([\w+-]*)\n([\s\S]*?)```/g
     let lastIndex = 0
@@ -158,11 +172,49 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
     const oldCode = typeof nodeParams?.jsCode === 'string' ? nodeParams.jsCode : undefined
     let preferredNewCode = ''
     if (codeMatches.length > 0) {
-      const preferred = codeMatches.find((c) => /^(javascript|js|typescript|ts)$/i.test(c.lang)) || codeMatches[0]
+      const progressLangStart = {
+        sessionId,
+        messages: [
+          { role: 'assistant', type: 'tool', displayTitle: 'Seleccionando lenguaje preferido', toolName: 'language_selection', status: 'running' },
+        ],
+      }
+      res.write(JSON.stringify(progressLangStart) + '\n')
+      const nodeLangRaw = String((nodeParams?.language ?? '')).toLowerCase()
+      const prefersPython = nodeLangRaw.includes('python')
+      const prefersTs = nodeLangRaw.includes('typescript') || nodeLangRaw.includes('ts')
+      const prefersJs = nodeLangRaw.includes('javascript') || nodeLangRaw.includes('js')
+      const order: string[] = prefersPython
+        ? ['python', 'typescript', 'ts', 'javascript', 'js', 'text']
+        : prefersTs
+        ? ['typescript', 'ts', 'javascript', 'js', 'python', 'text']
+        : prefersJs
+        ? ['javascript', 'js', 'typescript', 'ts', 'python', 'text']
+        : ['javascript', 'js', 'typescript', 'ts', 'python', 'text']
+      const preferred = codeMatches.find((c) => order.includes(c.lang.toLowerCase())) || codeMatches[0]
       preferredNewCode = preferred.code
+      const progressLangDone = {
+        sessionId,
+        messages: [
+          { role: 'assistant', type: 'tool', displayTitle: 'Lenguaje seleccionado', toolName: 'language_selection', status: 'completed' },
+        ],
+      }
+      res.write(JSON.stringify(progressLangDone) + '\n')
     }
 
     if (oldCode && preferredNewCode) {
+      const progressStart = {
+        sessionId,
+        messages: [
+          {
+            role: 'assistant',
+            type: 'tool',
+            displayTitle: 'Generando propuesta de reemplazo',
+            toolName: 'apply_suggestion',
+            status: 'running',
+          },
+        ],
+      }
+      res.write(JSON.stringify(progressStart) + '\n')
       const oldLines = oldCode.split('\n')
       const newLines = preferredNewCode.split('\n')
       let diff = `@@ -1,${oldLines.length} +1,${newLines.length} @@\n`
@@ -179,6 +231,19 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
         quickReplies,
       }
       blocks.push(codeDiffMsg)
+      const progressDone = {
+        sessionId,
+        messages: [
+          {
+            role: 'assistant',
+            type: 'tool',
+            displayTitle: 'Propuesta generada',
+            toolName: 'apply_suggestion',
+            status: 'completed',
+          },
+        ],
+      }
+      res.write(JSON.stringify(progressDone) + '\n')
     } else {
       const last = blocks[blocks.length - 1]
       if (last) last.quickReplies = quickReplies
