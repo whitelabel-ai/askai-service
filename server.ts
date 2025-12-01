@@ -193,130 +193,91 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
     res.status(500).json({ code: 500, message: 'Service misconfigured: ANTHROPIC key missing' })
     return
   }
-  res.setHeader('Content-Type', 'application/json-lines')
+  res.setHeader('Content-Type', 'application/json')
   try {
     const userTextBase = text || JSON.stringify(payload)
+    const allMessages: any[] = []
     if (payload?.context) {
       const toolStart = {
-        sessionId,
-        messages: [
-          {
-            role: 'assistant',
-            type: 'tool',
-            toolName: 'read_workflow_context',
-            displayTitle: 'Leyendo contexto del workflow',
-            status: 'running',
-            updates: [
-              { type: 'input', data: { hasActiveNodeInfo: !!payload?.context?.activeNodeInfo } },
-            ],
-          },
+        role: 'assistant',
+        type: 'tool',
+        toolName: 'read_workflow_context',
+        displayTitle: 'Leyendo contexto del workflow',
+        status: 'running',
+        updates: [
+          { type: 'input', data: { hasActiveNodeInfo: !!payload?.context?.activeNodeInfo } },
         ],
       }
-      res.write(JSON.stringify(toolStart) + '\n')
+      allMessages.push(toolStart)
       const toolDone = {
-        sessionId,
-        messages: [
-          {
-            role: 'assistant',
-            type: 'tool',
-            toolName: 'read_workflow_context',
-            displayTitle: 'Contexto del workflow leído',
-            status: 'completed',
-            updates: [{ type: 'output', data: { nodeType: payload?.context?.activeNodeInfo?.node?.type } }],
-          },
-        ],
+        role: 'assistant',
+        type: 'tool',
+        toolName: 'read_workflow_context',
+        displayTitle: 'Contexto del workflow leído',
+        status: 'completed',
+        updates: [{ type: 'output', data: { nodeType: payload?.context?.activeNodeInfo?.node?.type } }],
       }
-      res.write(JSON.stringify(toolDone) + '\n')
+      allMessages.push(toolDone)
     }
     const searchDocsStart = {
-      sessionId,
-      messages: [
-        {
-          role: 'assistant',
-          type: 'tool',
-          toolName: 'search_docs',
-          displayTitle: 'Buscando en documentación de n8n',
-          status: 'running',
-          updates: [{ type: 'input', data: { query: userTextBase } }],
-        },
-      ],
+      role: 'assistant',
+      type: 'tool',
+      toolName: 'search_docs',
+      displayTitle: 'Buscando en documentación de n8n',
+      status: 'running',
+      updates: [{ type: 'input', data: { query: userTextBase } }],
     }
-    res.write(JSON.stringify(searchDocsStart) + '\n')
+    allMessages.push(searchDocsStart)
     const docs = await searchDocs(userTextBase)
     const searchDocsDone = {
-      sessionId,
-      messages: [
-        {
-          role: 'assistant',
-          type: 'tool',
-          toolName: 'search_docs',
-          displayTitle: 'Documentación consultada',
-          status: 'completed',
-          updates: [{ type: 'output', data: { results: docs } }],
-        },
-      ],
+      role: 'assistant',
+      type: 'tool',
+      toolName: 'search_docs',
+      displayTitle: 'Documentación consultada',
+      status: 'completed',
+      updates: [{ type: 'output', data: { results: docs } }],
     }
-    res.write(JSON.stringify(searchDocsDone) + '\n')
+    allMessages.push(searchDocsDone)
 
     const searchForumStart = {
-      sessionId,
-      messages: [
-        {
-          role: 'assistant',
-          type: 'tool',
-          toolName: 'search_forum',
-          displayTitle: 'Buscando en foro de la comunidad',
-          status: 'running',
-          updates: [{ type: 'input', data: { query: userTextBase } }],
-        },
-      ],
+      role: 'assistant',
+      type: 'tool',
+      toolName: 'search_forum',
+      displayTitle: 'Buscando en foro de la comunidad',
+      status: 'running',
+      updates: [{ type: 'input', data: { query: userTextBase } }],
     }
-    res.write(JSON.stringify(searchForumStart) + '\n')
+    allMessages.push(searchForumStart)
     const forum = await searchForum(userTextBase)
     const searchForumDone = {
-      sessionId,
-      messages: [
-        {
-          role: 'assistant',
-          type: 'tool',
-          toolName: 'search_forum',
-          displayTitle: 'Foro consultado',
-          status: 'completed',
-          updates: [{ type: 'output', data: { results: forum } }],
-        },
-      ],
+      role: 'assistant',
+      type: 'tool',
+      toolName: 'search_forum',
+      displayTitle: 'Foro consultado',
+      status: 'completed',
+      updates: [{ type: 'output', data: { results: forum } }],
     }
-    res.write(JSON.stringify(searchForumDone) + '\n')
+    allMessages.push(searchForumDone)
 
     const searchTemplatesStart = {
-      sessionId,
-      messages: [
-        {
-          role: 'assistant',
-          type: 'tool',
-          toolName: 'search_templates',
-          displayTitle: 'Buscando plantillas de workflows',
-          status: 'running',
-          updates: [{ type: 'input', data: { query: userTextBase } }],
-        },
-      ],
+      role: 'assistant',
+      type: 'tool',
+      toolName: 'search_templates',
+      displayTitle: 'Buscando plantillas de workflows',
+      status: 'running',
+      updates: [{ type: 'input', data: { query: userTextBase } }],
     }
-    res.write(JSON.stringify(searchTemplatesStart) + '\n')
+    allMessages.push(searchTemplatesStart)
     const templates = await searchTemplates(userTextBase)
     const searchTemplatesDone = {
-      sessionId,
-      messages: [
-        {
-          role: 'assistant',
-          type: 'tool',
-          toolName: 'search_templates',
-          displayTitle: 'Plantillas consultadas',
-          status: 'completed',
-          updates: [{ type: 'output', data: { results: templates } }],
-        },
-      ],
+      role: 'assistant',
+      type: 'tool',
+      toolName: 'search_templates',
+      displayTitle: 'Plantillas consultadas',
+      status: 'completed',
+      updates: [{ type: 'output', data: { results: templates } }],
     }
-    res.write(JSON.stringify(searchTemplatesDone) + '\n')
+    allMessages.push(searchTemplatesDone)
 
     const sourcesText = [
       docs.length ? `Docs:\n${docs.map((d) => `- ${d.title} (${d.url})`).join('\n')}` : '',
@@ -349,8 +310,7 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
         title: 'Plantillas encontradas',
         content: md,
       }
-      const lineBlock = { sessionId, messages: [blockMsg] }
-      res.write(JSON.stringify(lineBlock) + '\n')
+      allMessages.push(blockMsg)
     }
     const blocks: any[] = []
     const re = /```([\w+-]*)\n([\s\S]*?)```/g
@@ -398,18 +358,13 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
 
     if (oldCode && preferredNewCode) {
       const progressStart = {
-        sessionId,
-        messages: [
-          {
-            role: 'assistant',
-            type: 'tool',
-            displayTitle: 'Generando propuesta de reemplazo',
-            toolName: 'apply_suggestion',
-            status: 'running',
-          },
-        ],
+        role: 'assistant',
+        type: 'tool',
+        displayTitle: 'Generando propuesta de reemplazo',
+        toolName: 'apply_suggestion',
+        status: 'running',
       }
-      res.write(JSON.stringify(progressStart) + '\n')
+      allMessages.push(progressStart)
       const oldLines = oldCode.split('\n')
       const newLines = preferredNewCode.split('\n')
       let diff = `@@ -1,${oldLines.length} +1,${newLines.length} @@\n`
@@ -427,31 +382,24 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
       }
       blocks.push(codeDiffMsg)
       const progressDone = {
-        sessionId,
-        messages: [
-          {
-            role: 'assistant',
-            type: 'tool',
-            displayTitle: 'Propuesta generada',
-            toolName: 'apply_suggestion',
-            status: 'completed',
-          },
-        ],
+        role: 'assistant',
+        type: 'tool',
+        displayTitle: 'Propuesta generada',
+        toolName: 'apply_suggestion',
+        status: 'completed',
       }
-      res.write(JSON.stringify(progressDone) + '\n')
+      allMessages.push(progressDone)
     } else {
       const last = blocks[blocks.length - 1]
       if (last) last.quickReplies = quickReplies
     }
-    const line = { sessionId, messages: blocks }
-    res.write(JSON.stringify(line) + '\n')
-    res.end()
+    const line = { sessionId, messages: [...allMessages, ...blocks] }
+    res.json(line)
   } catch (e: any) {
     const msg = e?.message || 'Chat failed'
     const status = e?.status || e?.statusCode || 500
     const line = { sessionId, messages: [{ role: 'assistant', type: 'error', content: msg }] }
-    res.write(JSON.stringify(line) + '\n')
-    res.end()
+    res.status(status === 401 ? 401 : 200).json(line)
     console.log(`[askai:${reqId}] chat error status=${status} message=${msg}`)
   }
 })
