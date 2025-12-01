@@ -122,12 +122,108 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
   res.setHeader('Content-Type', 'application/json-lines')
   try {
     const userText = text || JSON.stringify(payload)
+    if (payload?.context) {
+      const toolStart = {
+        sessionId,
+        messages: [
+          {
+            role: 'assistant',
+            type: 'tool',
+            toolName: 'read_workflow_context',
+            displayTitle: 'Leyendo contexto del workflow',
+            status: 'running',
+            updates: [
+              { type: 'input', data: { hasActiveNodeInfo: !!payload?.context?.activeNodeInfo } },
+            ],
+          },
+        ],
+      }
+      res.write(JSON.stringify(toolStart) + '\n')
+      const toolDone = {
+        sessionId,
+        messages: [
+          {
+            role: 'assistant',
+            type: 'tool',
+            toolName: 'read_workflow_context',
+            displayTitle: 'Contexto del workflow leído',
+            status: 'completed',
+            updates: [{ type: 'output', data: { nodeType: payload?.context?.activeNodeInfo?.node?.type } }],
+          },
+        ],
+      }
+      res.write(JSON.stringify(toolDone) + '\n')
+    }
+    {
+      const searchDocsStart = {
+        sessionId,
+        messages: [
+          {
+            role: 'assistant',
+            type: 'tool',
+            toolName: 'search_docs',
+            displayTitle: 'Buscando en documentación de n8n',
+            status: 'running',
+            updates: [{ type: 'input', data: { query: text } }],
+          },
+        ],
+      }
+      res.write(JSON.stringify(searchDocsStart) + '\n')
+    }
+    {
+      const searchForumStart = {
+        sessionId,
+        messages: [
+          {
+            role: 'assistant',
+            type: 'tool',
+            toolName: 'search_forum',
+            displayTitle: 'Buscando en foro de la comunidad',
+            status: 'running',
+            updates: [{ type: 'input', data: { query: text } }],
+          },
+        ],
+      }
+      res.write(JSON.stringify(searchForumStart) + '\n')
+    }
     const r = await anthropic.messages.create({
       model: ANTHROPIC_MODEL,
       max_tokens: 1024,
       system: 'Eres un asistente de n8n. Cuando incluyas código, usa bloques con triple acento grave separados por sección y especifica el lenguaje, por ejemplo ```javascript ... ``` o ```sql ... ```, etc...',
       messages: [{ role: 'user', content: userText }],
     })
+    {
+      const searchDocsDone = {
+        sessionId,
+        messages: [
+          {
+            role: 'assistant',
+            type: 'tool',
+            toolName: 'search_docs',
+            displayTitle: 'Documentación consultada',
+            status: 'completed',
+            updates: [{ type: 'output', data: { sources: ['docs'] } }],
+          },
+        ],
+      }
+      res.write(JSON.stringify(searchDocsDone) + '\n')
+    }
+    {
+      const searchForumDone = {
+        sessionId,
+        messages: [
+          {
+            role: 'assistant',
+            type: 'tool',
+            toolName: 'search_forum',
+            displayTitle: 'Foro consultado',
+            status: 'completed',
+            updates: [{ type: 'output', data: { sources: ['forum'] } }],
+          },
+        ],
+      }
+      res.write(JSON.stringify(searchForumDone) + '\n')
+    }
     const raw = r.content?.map((c: any) => ('text' in c ? c.text : '')).join('\n') || ''
     const blocks: any[] = []
     const re = /```([\w+-]*)\n([\s\S]*?)```/g
