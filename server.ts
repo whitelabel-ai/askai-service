@@ -5,6 +5,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import { v4 as uuidv4 } from 'uuid'
 
 const app = express()
+app.use((req, _res, next) => { console.log(`[askai] ${req.method} ${req.path}`); next() })
 app.use(cors())
 app.use(express.json({ limit: '2mb' }))
 
@@ -52,7 +53,7 @@ app.post('/chat', verifyAuth, async (req, res) => {
   const text = payload?.text || ''
   if (!text && !('type' in payload)) { res.status(400).json({ message: 'payload required' }); return }
   if (!ANTHROPIC_KEY) { res.status(500).json({ message: 'ANTHROPIC key missing' }); return }
-  res.setHeader('Content-Type', 'application/x-ndjson')
+  res.setHeader('Content-Type', 'application/json-lines')
   try {
     const r = await anthropic.messages.create({ model: 'claude-3-5-sonnet-20241022', max_tokens: 1024, messages: [{ role: 'user', content: text || JSON.stringify(payload) }] })
     const content = r.content?.map((c: any) => ('text' in c ? c.text : '')).join('\n') || ''
@@ -74,3 +75,5 @@ app.post('/chat/apply-suggestion', verifyAuth, async (req, res) => {
 
 const port = process.env.PORT ? Number(process.env.PORT) : 8080
 app.listen(port, () => {})
+app.get('/healthz', (_req, res) => { res.json({ ok: true }) })
+app.get('/', (_req, res) => { res.json({ ok: true, service: 'askai-service' }) })
