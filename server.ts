@@ -301,7 +301,8 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
     if (templates.length) {
       const md = templates
         .map(
-          (t) => `- [${t.title}](${t.url})  \\n+  Importar en tu instancia: [Abrir](${t.importUrl})`,
+          (t) => `- [${t.title}](${t.url})  \\
+  Importar en tu instancia: [Abrir](${t.importUrl})`,
         )
         .join('\n')
       const blockMsg = {
@@ -311,6 +312,17 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
         content: md,
       }
       allMessages.push(blockMsg)
+      const guideMsg = {
+        role: 'assistant',
+        type: 'message',
+        text:
+          'Para importar una plantilla, haz clic en "Abrir" junto a la plantilla deseada. Se abrirá en tu instancia para configurar: parámetros, credenciales y ajustes. Si quieres otra búsqueda, dime la app o el caso de uso.',
+        quickReplies: [
+          { type: 'new-suggestion', text: 'Buscar más plantillas' },
+          { type: 'resolved', text: 'Listo, gracias', isFeedback: true },
+        ],
+      }
+      allMessages.push(guideMsg)
     }
     const blocks: any[] = []
     const re = /```([\w+-]*)\n([\s\S]*?)```/g
