@@ -124,22 +124,35 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
     const r = await anthropic.messages.create({
       model: ANTHROPIC_MODEL,
       max_tokens: 1024,
+      system: 'Cuando incluyas código, usa bloques con triple acento grave separados por sección y especifica el lenguaje, por ejemplo ```javascript ... ``` o ```sql ... ```.',
       messages: [{ role: 'user', content: userText }],
     })
     const raw = r.content?.map((c: any) => ('text' in c ? c.text : '')).join('\n') || ''
-    const fenced = raw.match(/```[a-zA-Z]*\n([\s\S]*?)```/)
-    const inlineFenced = raw.match(/```([\s\S]*?)```/)
-    const match = fenced || inlineFenced
-    const codeContent = match ? match[1].trim() : ''
-    const textOnly = match ? raw.replace(match[0], '').trim() : raw.trim()
-    const codeSnippet = codeContent ? `\`\`\`javascript\n${codeContent}\n\`\`\`` : undefined
+    const blocks: any[] = []
+    const re = /```([\w+-]*)\n([\s\S]*?)```/g
+    let lastIndex = 0
+    let m: RegExpExecArray | null
+    while ((m = re.exec(raw)) !== null) {
+      const pre = raw.slice(lastIndex, m.index).trim()
+      if (pre) blocks.push({ role: 'assistant', type: 'message', text: pre })
+      const lang = m[1] || 'text'
+      const code = m[2].trim()
+      const snippet = `\`\`\`${lang}\n${code}\n\`\`\``
+      blocks.push({ role: 'assistant', type: 'message', text: '', codeSnippet: snippet })
+      lastIndex = re.lastIndex
+    }
+    const post = raw.slice(lastIndex).trim()
+    if (post) blocks.push({ role: 'assistant', type: 'message', text: post })
+    if (blocks.length === 0) {
+      blocks.push({ role: 'assistant', type: 'message', text: raw.trim() })
+    }
     const quickReplies = [
       { type: 'new-suggestion', text: 'Dame otra solución' },
       { type: 'resolved', text: 'Sí, gracias', isFeedback: true },
     ]
-    const assistantMsg: any = { role: 'assistant', type: 'message', text: textOnly || 'He generado un código para ti:', quickReplies }
-    if (codeSnippet) (assistantMsg as any).codeSnippet = codeSnippet
-    const line = { sessionId, messages: [assistantMsg] }
+    const last = blocks[blocks.length - 1]
+    if (last) last.quickReplies = quickReplies
+    const line = { sessionId, messages: blocks }
     res.write(JSON.stringify(line) + '\n')
     res.end()
   } catch (e: any) {
