@@ -23,7 +23,10 @@ const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret'
 const ANTHROPIC_KEY = process.env.N8N_AI_ANTHROPIC_KEY || process.env.ANTHROPIC_API_KEY || ''
 const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || 'claude-3-5-sonnet-20241022'
 const anthropic = new Anthropic({ apiKey: ANTHROPIC_KEY })
-const suggestionsStore = new Map<string, { sessionId: string; proposed: string; original?: string }>()
+const suggestionsStore = new Map<
+  string,
+  { sessionId: string; proposed: string; original?: string }
+>()
 
 async function fetchHtml(url: string, timeoutMs = 5000): Promise<string> {
   const ac = new AbortController()
@@ -33,7 +36,7 @@ async function fetchHtml(url: string, timeoutMs = 5000): Promise<string> {
       signal: ac.signal,
       headers: {
         'User-Agent': 'Mozilla/5.0',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9',
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9',
       },
     })
     clearTimeout(t)
@@ -80,11 +83,19 @@ async function searchForum(query: string) {
 }
 
 async function searchTemplates(query: string) {
-  const results: Array<{ id: string; title: string; url: string; importUrl: string; summary?: string }> = []
+  const results: Array<{
+    id: string
+    title: string
+    url: string
+    importUrl: string
+    summary?: string
+  }> = []
+
   // Intento 1: página de búsqueda del sitio (Next.js)
   {
     const siteUrl = `https://n8n.io/workflows/?q=${encodeURIComponent(query)}`
     const html = await fetchHtml(siteUrl)
+    // Capturar enlaces con id y slug, absoluto o relativo
     const reWork = /href="(?:https?:\/\/n8n\.io)?\/workflows\/(\d+)-([^"\/]+)[^\"]*"/gi
     let m: RegExpExecArray | null
     while ((m = reWork.exec(html)) && results.length < 5) {
@@ -98,8 +109,9 @@ async function searchTemplates(query: string) {
       }
     }
   }
+
   if (results.length === 0) {
-    // Fallback 1
+    // Fallback 1: buscar id+slug dentro del HTML sin depender de texto de ancla
     const siteUrl = `https://n8n.io/workflows/?q=${encodeURIComponent(query)}`
     const html = await fetchHtml(siteUrl)
     const reAny = /\/workflows\/(\d+)-([a-zA-Z0-9-]+)/g
@@ -115,10 +127,14 @@ async function searchTemplates(query: string) {
       }
     }
   }
+
   if (results.length === 0) {
     // Fallback 2: DuckDuckGo
-    const url = `https://duckduckgo.com/html/?q=${encodeURIComponent(`site:n8n.io/workflows ${query}`)}`
+    const url = `https://duckduckgo.com/html/?q=${encodeURIComponent(
+      `site:n8n.io/workflows ${query}`,
+    )}`
     const html = await fetchHtml(url)
+    // Capturar enlaces absolutos con id y slug en la URL destino
     const re = /<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi
     let m: RegExpExecArray | null
     while ((m = re.exec(html)) && results.length < 5) {
@@ -131,23 +147,34 @@ async function searchTemplates(query: string) {
       const id = idSlug ? idSlug[1] : idOnly![1]
       const slug = idSlug ? decodeURIComponent(idSlug[2]) : ''
       const title = slug ? slug.replace(/-/g, ' ').replace(/\s+/g, ' ').trim() : `Workflow ${id}`
-      const urlFinal = idSlug ? `https://n8n.io/workflows/${id}-${slug}/` : `https://n8n.io/workflows/${id}/`
+      const urlFinal = idSlug
+        ? `https://n8n.io/workflows/${id}-${slug}/`
+        : `https://n8n.io/workflows/${id}/`
       const importUrl = `https://automation.whitelabel.lat/templates/${id}/setup`
       if (!results.find((r) => r.id === id)) {
         results.push({ id, title, url: urlFinal, importUrl })
       }
     }
   }
-  // Enriquecer con summary (best-effort)
-  for (let i = 0; i < Math.min(results.length, 3); i++) {
+
+  // Enriquecer con una breve descripción (best-effort)
+  for (let i = 0; i < Math.min(results.length, 5); i++) {
     const r = results[i]
     const html = await fetchHtml(r.url)
-    const metaDesc = html.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i)
-    const ogDesc = html.match(/<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']+)["']/i)
+    if (!html) continue
+    const metaDesc = html.match(
+      /<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i,
+    )
+    const ogDesc = html.match(
+      /<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']+)["']/i,
+    )
     const firstP = html.match(/<p>([^<]{40,})<\/p>/i)
     const desc = metaDesc?.[1] || ogDesc?.[1] || firstP?.[1] || ''
-    if (desc) r.summary = desc.replace(/\s+/g, ' ').trim()
+    if (desc) {
+      r.summary = desc.replace(/\s+/g, ' ').trim()
+    }
   }
+
   return results
 }
 
@@ -195,11 +222,16 @@ app.post('/v1/ask-ai', verifyAuth, async (req, res) => {
   }
   if (!ANTHROPIC_KEY) {
     console.log(`[askai:${reqId}] anthropic key missing`)
-    res.status(500).json({ code: 500, message: 'Service misconfigured: ANTHROPIC key missing' })
+    res
+      .status(500)
+      .json({ code: 500, message: 'Service misconfigured: ANTHROPIC key missing' })
     return
   }
-  const system = 'Eres un asistente de n8n. Devuelve exclusivamente código JavaScript válido, sin explicaciones ni bloques Markdown. No incluyas ```.'
-  const user = `Nodo: ${JSON.stringify(forNode)}\nContexto: ${JSON.stringify(context)}\nPregunta: ${question}`
+  const system =
+    'Eres un asistente de n8n. Devuelve exclusivamente código JavaScript válido, sin explicaciones ni bloques Markdown. No incluyas ```.'
+  const user = `Nodo: ${JSON.stringify(forNode)}\nContexto: ${JSON.stringify(
+    context,
+  )}\nPregunta: ${question}`
   try {
     const r = await anthropic.messages.create({
       model: ANTHROPIC_MODEL,
@@ -247,7 +279,9 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
     return
   }
   if (!ANTHROPIC_KEY) {
-    res.status(500).json({ code: 500, message: 'Service misconfigured: ANTHROPIC key missing' })
+    res
+      .status(500)
+      .json({ code: 500, message: 'Service misconfigured: ANTHROPIC key missing' })
     return
   }
   res.setHeader('Content-Type', 'application/json')
@@ -263,9 +297,7 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
         toolName: 'read_workflow_context',
         displayTitle: 'Leyendo contexto del workflow',
         status: 'running',
-        updates: [
-          { type: 'input', data: { hasActiveNodeInfo: !!payload?.context?.activeNodeInfo } },
-        ],
+        updates: [{ type: 'input', data: { hasActiveNodeInfo: !!payload?.context?.activeNodeInfo } }],
       }
       allMessages.push(toolStart)
       const toolDone = {
@@ -275,7 +307,10 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
         displayTitle: 'Contexto del workflow leído',
         status: 'completed',
         updates: [
-          { type: 'output', data: { nodeType: payload?.context?.activeNodeInfo?.node?.type } },
+          {
+            type: 'output',
+            data: { nodeType: payload?.context?.activeNodeInfo?.node?.type },
+          },
         ],
       }
       allMessages.push(toolDone)
@@ -350,10 +385,9 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
     const sourcesText = [
       docs.length ? `Docs:\n${docs.map((d) => `- ${d.title} (${d.url})`).join('\n')}` : '',
       forum.length ? `Forum:\n${forum.map((d) => `- ${d.title} (${d.url})`).join('\n')}` : '',
-      // Templates: solo damos contexto de import, sin URL pública
       templates.length
         ? `Templates:\n${templates
-            .map((t) => `- ${t.title}\n  Importar: ${t.importUrl}`)
+            .map((t) => `- ${t.title} (${t.url})\n  Importar: ${t.importUrl}`)
             .join('\n')}`
         : '',
     ]
@@ -362,55 +396,64 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
 
     const userText = sourcesText ? `${userTextBase}\n\nFuentes:\n${sourcesText}` : userTextBase
 
-    const wantsTemplates = /\b(template|plantilla|workflow|plantillas|templates)\b/i.test(textQuery)
-    console.log(`[askai:${reqId}] wantsTemplates=${wantsTemplates} templates=${templates.length}`)
+    // Solo mostrar plantillas cuando el usuario habla de plantillas/workflows
+    const wantsTemplates = /\b(template|plantilla|workflow|plantillas|templates)\b/i.test(
+      textQuery,
+    )
+    console.log(
+      `[askai:${reqId}] wantsTemplates=${wantsTemplates} templates=${templates.length}`,
+    )
 
-    // --- RESPUESTA SOLO CON PLANTILLAS (BONITA Y SIN ENLACE PÚBLICO) ---
     if (templates.length && wantsTemplates) {
-      const md = templates
-        .slice(0, 3)
-        .map((t) => {
-          const summary = t.summary
-            ? `\n_${t.summary.slice(0, 160)}..._`
-            : '_Workflow listo para usar._'
-          return `**${t.title}**${summary}\n\n➡️ **[⬇️ Importar en tu n8n](${t.importUrl})**`
-        })
-        .join('\n\n---\n\n')
+      // Una tarjeta (block) por plantilla, bonita y sólo con botón de importar
+      const cards = templates.slice(0, 5).map((t) => {
+        const desc =
+          (t.summary || '').replace(/\s+/g, ' ').trim() ||
+          'Workflow listo para usar en tu instancia de n8n.'
+        const short =
+          desc.length > 220
+            ? `${desc.slice(0, 217).trimEnd()}...`
+            : desc
 
-      const blockMsg = {
-        id: uuidv4(),
-        role: 'assistant' as const,
-        type: 'block' as const,
-        title: 'Plantillas encontradas',
-        content: md,
-        read: false,
-      }
+        const content = [
+          `_${short}_`,
+          '',
+          `➡️ **[⬇️ Importar en tu n8n](${t.importUrl})**`,
+        ].join('\n')
+
+        return {
+          role: 'assistant',
+          type: 'block',
+          title: `📄 ${t.title}`,
+          content,
+        }
+      })
 
       const guideMsg = {
-        id: uuidv4(),
-        role: 'assistant' as const,
-        type: 'text' as const,
-        content:
-          'He encontrado estas plantillas. Haz clic en **⬇️ Importar en tu n8n** para añadirlas a tu instancia.',
+        role: 'assistant',
+        type: 'message',
+        text:
+          'He encontrado estas plantillas de n8n. Haz clic en **⬇️ Importar en tu n8n** en la que más se acerque a lo que necesitas, y se abrirá en tu instancia para terminar de configurarla.',
         quickReplies: [
           { type: 'new-suggestion', text: 'Buscar más plantillas' },
           { type: 'resolved', text: 'Listo, gracias', isFeedback: true },
         ],
-        read: false,
       }
 
-      const line = { sessionId, messages: [...allMessages, blockMsg, guideMsg] }
-      console.log(`[askai:${reqId}] respond templates-only messages=${line.messages.length}`)
+      const line = { sessionId, messages: [...allMessages, ...cards, guideMsg] }
+      console.log(
+        `[askai:${reqId}] respond templates-only cards=${cards.length} messages=${line.messages.length}`,
+      )
       res.json(line)
       return
     }
 
-    // --- RESPUESTA GENERAL (NO PIDE PLANTILLAS) ---
+    // Respuesta general (cuando no es una pregunta de plantillas)
     const r = await anthropic.messages.create({
       model: ANTHROPIC_MODEL,
       max_tokens: 1024,
       system:
-        'Eres un asistente de n8n. Cuando incluyas código, usa bloques con triple acento grave separados por sección y especifica el lenguaje, por ejemplo ```javascript ... ``` o ```sql ... ```.',
+        'Eres un asistente de n8n. Cuando incluyas código, usa bloques con triple acento grave separados por sección y especifica el lenguaje, por ejemplo ```javascript ... ``` o ```sql ... ```, etc...',
       messages: [{ role: 'user', content: userText }],
     })
     const raw = r.content?.map((c: any) => ('text' in c ? c.text : '')).join('\n') || ''
@@ -423,19 +466,19 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
 
     while ((m = re.exec(raw)) !== null) {
       const pre = raw.slice(lastIndex, m.index).trim()
-      if (pre) blocks.push({ role: 'assistant', type: 'text', content: pre })
+      if (pre) blocks.push({ role: 'assistant', type: 'message', text: pre })
       const lang = m[1] || 'text'
       const code = m[2].trim()
       const snippet = `\`\`\`${lang}\n${code}\n\`\`\``
-      blocks.push({ role: 'assistant', type: 'text', content: '', codeSnippet: snippet })
+      blocks.push({ role: 'assistant', type: 'message', text: '', codeSnippet: snippet })
       codeMatches.push({ lang, code })
       lastIndex = re.lastIndex
     }
 
     const post = raw.slice(lastIndex).trim()
-    if (post) blocks.push({ role: 'assistant', type: 'text', content: post })
+    if (post) blocks.push({ role: 'assistant', type: 'message', text: post })
     if (blocks.length === 0) {
-      blocks.push({ role: 'assistant', type: 'text', content: raw.trim() })
+      blocks.push({ role: 'assistant', type: 'message', text: raw.trim() })
     }
 
     const quickReplies = [
@@ -446,12 +489,11 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
     const nodeParams = (payload?.context?.activeNodeInfo?.node?.parameters ||
       payload?.workflowContext?.activeNodeInfo?.node?.parameters ||
       undefined) as any
-
     const oldCode = typeof nodeParams?.jsCode === 'string' ? nodeParams.jsCode : undefined
     let preferredNewCode = ''
 
     if (codeMatches.length > 0) {
-      const nodeLangRaw = String((nodeParams?.language ?? '')).toLowerCase()
+      const nodeLangRaw = String(nodeParams?.language ?? '').toLowerCase()
       const prefersPython = nodeLangRaw.includes('python')
       const prefersTs = nodeLangRaw.includes('typescript') || nodeLangRaw.includes('ts')
       const prefersJs = nodeLangRaw.includes('javascript') || nodeLangRaw.includes('js')
@@ -462,6 +504,7 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
         : prefersJs
         ? ['javascript', 'js', 'typescript', 'ts', 'python', 'text']
         : ['javascript', 'js', 'typescript', 'ts', 'python', 'text']
+
       const preferred =
         codeMatches.find((c) => order.includes(c.lang.toLowerCase())) || codeMatches[0]
       preferredNewCode = preferred.code
@@ -476,20 +519,17 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
         status: 'running',
       }
       allMessages.push(progressStart)
-
       const oldLines = oldCode.split('\n')
       const newLines = preferredNewCode.split('\n')
       let diff = `@@ -1,${oldLines.length} +1,${newLines.length} @@\n`
       for (const l of oldLines) diff += `-${l}\n`
       for (const l of newLines) diff += `+${l}\n`
-
       const suggestionId = uuidv4()
       suggestionsStore.set(suggestionId, {
         sessionId,
         original: oldCode,
         proposed: preferredNewCode,
       })
-
       const codeDiffMsg: any = {
         role: 'assistant',
         type: 'code-diff',
@@ -499,7 +539,6 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
         quickReplies,
       }
       blocks.push(codeDiffMsg)
-
       const progressDone = {
         role: 'assistant',
         type: 'tool',
@@ -510,7 +549,7 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
       allMessages.push(progressDone)
     } else {
       const last = blocks[blocks.length - 1]
-      if (last) (last as any).quickReplies = quickReplies
+      if (last) last.quickReplies = quickReplies
     }
 
     const line = { sessionId, messages: [...allMessages, ...blocks] }
