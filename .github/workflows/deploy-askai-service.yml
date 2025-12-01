@@ -1,0 +1,47 @@
+name: CI - Build & Push AskAI Service
+
+on:
+  push:
+    branches: ['main']
+    paths:
+      - 'Pedro/askai-service/**'
+      - '.github/workflows/deploy-askai-service.yml'
+  workflow_dispatch:
+
+env:
+  REGISTRY: registry.whitelabel.lat
+  IMAGE_NAME: whitelabel-ai/askai-service
+  REGISTRY_IMAGE: registry.whitelabel.lat/whitelabel-ai/askai-service
+
+jobs:
+  build-and-push:
+    name: Build and Push AskAI Service Image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to private registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      - name: Build and push AskAI Service image
+        uses: docker/build-push-action@v5
+        with:
+          context: Pedro/askai-service
+          file: Pedro/askai-service/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.REGISTRY_IMAGE }}:${{ github.sha }}
+            ${{ env.REGISTRY_IMAGE }}:latest
+
