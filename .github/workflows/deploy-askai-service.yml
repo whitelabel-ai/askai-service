@@ -3,9 +3,6 @@ name: CI - Build & Push AskAI Service
 on:
   push:
     branches: ['main']
-    paths:
-      - 'Pedro/askai-service/**'
-      - '.github/workflows/deploy-askai-service.yml'
   workflow_dispatch:
 
 env:
@@ -37,11 +34,10 @@ jobs:
       - name: Build and push AskAI Service image
         uses: docker/build-push-action@v5
         with:
-          context: Pedro/askai-service
-          file: Pedro/askai-service/Dockerfile
+          context: .
+          file: Dockerfile
           platforms: linux/amd64
           push: true
           tags: |
             ${{ env.REGISTRY_IMAGE }}:${{ github.sha }}
             ${{ env.REGISTRY_IMAGE }}:latest
-
