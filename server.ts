@@ -21,6 +21,7 @@ app.use((req, res, next) => {
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret'
 const ANTHROPIC_KEY = process.env.N8N_AI_ANTHROPIC_KEY || process.env.ANTHROPIC_API_KEY || ''
+const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || 'claude-3-5-sonnet-20241022'
 const anthropic = new Anthropic({ apiKey: ANTHROPIC_KEY })
 
 function verifyAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
@@ -74,7 +75,7 @@ app.post('/v1/ask-ai', verifyAuth, async (req, res) => {
   const user = `Nodo: ${JSON.stringify(forNode)}\nContexto: ${JSON.stringify(context)}\nPregunta: ${question}`
   try {
     const r = await anthropic.messages.create({
-      model: 'claude-3-5-sonnet-20241022',
+      model: ANTHROPIC_MODEL,
       max_tokens: 1024,
       system,
       messages: [{ role: 'user', content: user }],
@@ -92,6 +93,8 @@ app.post('/v1/ask-ai', verifyAuth, async (req, res) => {
       res.status(413).json({ code: 413, message: 'Content too large' })
     } else if (status === 400) {
       res.status(400).json({ code: 400, message: msg })
+    } else if (status === 404) {
+      res.status(400).json({ code: 400, message: 'Anthropic model not found or unsupported' })
     } else {
       res.status(500).json({ code: 500, message: msg })
     }
