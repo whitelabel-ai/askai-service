@@ -71,7 +71,7 @@ app.post('/v1/ask-ai', verifyAuth, async (req, res) => {
     res.status(500).json({ code: 500, message: 'Service misconfigured: ANTHROPIC key missing' })
     return
   }
-  const system = 'Eres un asistente de n8n. Devuelve solo código válido, sin explicaciones.'
+  const system = 'Eres un asistente de n8n. Devuelve exclusivamente código JavaScript válido, sin explicaciones ni bloques Markdown. No incluyas ```.'
   const user = `Nodo: ${JSON.stringify(forNode)}\nContexto: ${JSON.stringify(context)}\nPregunta: ${question}`
   try {
     const r = await anthropic.messages.create({
@@ -80,7 +80,10 @@ app.post('/v1/ask-ai', verifyAuth, async (req, res) => {
       system,
       messages: [{ role: 'user', content: user }],
     })
-    const content = r.content?.map((c: any) => ('text' in c ? c.text : '')).join('\n') || ''
+    const raw = r.content?.map((c: any) => ('text' in c ? c.text : '')).join('\n') || ''
+    const fenced = raw.match(/```[a-zA-Z]*\n([\s\S]*?)```/)
+    const inlineFenced = raw.match(/```([\s\S]*?)```/)
+    const content = fenced ? fenced[1].trim() : inlineFenced ? inlineFenced[1].trim() : raw.trim()
     console.log(`[askai:${reqId}] anthropic ok len=${content.length}`)
     res.json({ code: content })
   } catch (e: any) {
