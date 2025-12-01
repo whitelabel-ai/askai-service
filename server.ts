@@ -80,7 +80,7 @@ async function searchForum(query: string) {
 }
 
 async function searchTemplates(query: string) {
-  const results: Array<{ id: string; title: string; url: string; importUrl: string }> = []
+  const results: Array<{ id: string; title: string; url: string; importUrl: string; summary?: string }> = []
   // Intento 1: página de búsqueda del sitio (Next.js)
   {
     const siteUrl = `https://n8n.io/workflows/?q=${encodeURIComponent(query)}`
@@ -139,6 +139,16 @@ async function searchTemplates(query: string) {
         results.push({ id, title, url: urlFinal, importUrl })
       }
     }
+  }
+  // Enrich with summary (best-effort)
+  for (let i = 0; i < Math.min(results.length, 3); i++) {
+    const r = results[i]
+    const html = await fetchHtml(r.url)
+    const metaDesc = html.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i)
+    const ogDesc = html.match(/<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']+)["']/i)
+    const firstP = html.match(/<p>([^<]{40,})<\/p>/i)
+    const desc = metaDesc?.[1] || ogDesc?.[1] || firstP?.[1] || ''
+    if (desc) r.summary = desc.replace(/\s+/g, ' ').trim()
   }
   return results
 }
@@ -345,21 +355,23 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
     const wantsTemplates = /\b(template|plantilla|workflow|plantillas|templates)\b/i.test(textQuery)
     console.log(`[askai:${reqId}] wantsTemplates=${wantsTemplates} templates=${templates.length}`)
     if (templates.length && wantsTemplates) {
-      const pretty = templates
-        .map(
-          (t) => `• ${t.title}\n  Ver: ${t.url}\n  Importar: ${t.importUrl}`,
-        )
+      const md = templates
+        .map((t) => {
+          const summary = t.summary ? `\n  _${t.summary.slice(0, 160)}..._` : ''
+          return `- [${t.title}](${t.url})\n  [Importar](${t.importUrl})${summary}`
+        })
         .join('\n\n')
-      const tplMsg = {
-        role: 'assistant',
-        type: 'message',
-        text: `Plantillas encontradas:\n\n${pretty}`,
+      const blockMsg = {
+        role: 'assistant' as const,
+        type: 'block' as const,
+        title: 'Plantillas encontradas',
+        content: md,
         quickReplies: [
           { type: 'new-suggestion', text: 'Buscar más plantillas' },
           { type: 'resolved', text: 'Listo, gracias', isFeedback: true },
         ],
       }
-      const line = { sessionId, messages: [...allMessages, tplMsg] }
+      const line = { sessionId, messages: [...allMessages, blockMsg] }
       console.log(`[askai:${reqId}] respond templates-only messages=${line.messages.length}`)
       res.json(line)
       return
@@ -404,18 +416,18 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
     const codeMatches: Array<{ lang: string; code: string }> = []
     while ((m = re.exec(raw)) !== null) {
       const pre = raw.slice(lastIndex, m.index).trim()
-      if (pre) blocks.push({ role: 'assistant', type: 'message', text: pre })
+      if (pre) blocks.push({ role: 'assistant', type: 'text', content: pre })
       const lang = m[1] || 'text'
       const code = m[2].trim()
       const snippet = `\`\`\`${lang}\n${code}\n\`\`\``
-      blocks.push({ role: 'assistant', type: 'message', text: '', codeSnippet: snippet })
+      blocks.push({ role: 'assistant', type: 'text', content: '', codeSnippet: snippet })
       codeMatches.push({ lang, code })
       lastIndex = re.lastIndex
     }
     const post = raw.slice(lastIndex).trim()
-    if (post) blocks.push({ role: 'assistant', type: 'message', text: post })
+    if (post) blocks.push({ role: 'assistant', type: 'text', content: post })
     if (blocks.length === 0) {
-      blocks.push({ role: 'assistant', type: 'message', text: raw.trim() })
+      blocks.push({ role: 'assistant', type: 'text', content: raw.trim() })
     }
     const quickReplies = [
       { type: 'new-suggestion', text: 'Dame otra solución' },
