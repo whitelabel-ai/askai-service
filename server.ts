@@ -6,7 +6,7 @@ import { v4 as uuidv4 } from 'uuid'
 
 const app = express()
 app.use(cors())
-app.use(express.json({ limit: '2mb' }))
+app.use(express.json({ limit: '16mb' }))
 app.use((req, res, next) => {
   const reqId = uuidv4().slice(0, 8)
   ;(req as any).reqId = reqId
@@ -36,6 +36,9 @@ const N8N_BASE_URL = (process.env.N8N_BASE_URL || 'https://automation.whitelabel
   /\/+$/,
   '',
 )
+// El AI Builder de n8n fija el modelo (claude-sonnet-4-5). Para forzar otro
+// (p. ej. abaratar con haiku) seteá BUILDER_MODEL; por defecto se respeta el de n8n.
+const BUILDER_MODEL = process.env.BUILDER_MODEL || ''
 
 const anthropic = new Anthropic({ apiKey: ANTHROPIC_KEY })
 const suggestionsStore = new Map<
@@ -467,6 +470,120 @@ function applySuggestion(req: express.Request, res: express.Response) {
 
 app.post('/v1/chat/apply-suggestion', verifyAuth, applySuggestion)
 app.post('/ai/chat/apply-suggestion', verifyAuth, applySuggestion)
+
+// ----------------------------------------------------------------------------
+// AI Workflow Builder ("Build with AI") — arquitectura de proxy:
+//   1) n8n pide un token corto a /v1/builder/api-proxy-token
+//   2) n8n manda las llamadas al LLM a /v1/api-proxy/anthropic/v1/messages con
+//      ese token; acá validamos, inyectamos la API key real y reenviamos a
+//      Anthropic devolviendo el stream tal cual.
+//   3) /v1/builder/usage y /v1/builder/success exponen créditos (stub).
+// ----------------------------------------------------------------------------
+app.post('/v1/builder/api-proxy-token', (req, res) => {
+  const reqId = (req as any).reqId || '-'
+  const { licenseCert } = req.body || {}
+  if (!licenseCert) {
+    res.status(400).json({ message: 'licenseCert required' })
+    return
+  }
+  const accessToken = jwt.sign({ sub: 'builder', aud: 'api-proxy' }, JWT_SECRET, { expiresIn: '1h' })
+  console.log(`[askai:${reqId}] issued builder proxy token`)
+  res.json({ accessToken, tokenType: 'Bearer' })
+})
+
+// Créditos: stub generoso (uso personal). Si querés cuota real, calculala acá.
+const BUILDER_CREDITS = { creditsQuota: 999999, creditsClaimed: 0 }
+app.post('/v1/builder/usage', (_req, res) => res.json(BUILDER_CREDITS))
+app.post('/v1/builder/success', (_req, res) => res.json(BUILDER_CREDITS))
+
+// Tracing LangSmith: no-op (no debe bloquear la generación).
+app.use('/v1/api-proxy/langsmith', (_req, res) => {
+  res.status(200).json({})
+})
+
+// Proxy Anthropic. LangChain (ChatAnthropic) usa base /v1/api-proxy/anthropic y
+// le agrega /v1/messages. Catch-all para soportar también count_tokens, etc.
+app.post('/v1/api-proxy/anthropic/*', async (req, res) => {
+  const reqId = (req as any).reqId || '-'
+  const h = req.headers.authorization || ''
+  const token = h.startsWith('Bearer ') ? h.slice(7) : ''
+  try {
+    jwt.verify(token, JWT_SECRET)
+  } catch {
+    res.status(401).json({
+      type: 'error',
+      error: { type: 'authentication_error', message: 'Invalid proxy token' },
+    })
+    return
+  }
+  if (!ANTHROPIC_KEY) {
+    res.status(500).json({
+      type: 'error',
+      error: { type: 'api_error', message: 'ANTHROPIC key missing' },
+    })
+    return
+  }
+
+  const sub = req.originalUrl.replace(/^\/v1\/api-proxy\/anthropic/, '') || '/v1/messages'
+  const upstreamUrl = `https://api.anthropic.com${sub}`
+
+  const payload: any = { ...(req.body || {}) }
+  if (BUILDER_MODEL && payload && typeof payload === 'object' && 'model' in payload) {
+    payload.model = BUILDER_MODEL
+  }
+
+  const headers: Record<string, string> = {
+    'content-type': 'application/json',
+    'x-api-key': ANTHROPIC_KEY,
+    'anthropic-version': (req.headers['anthropic-version'] as string) || '2023-06-01',
+  }
+  if (req.headers['anthropic-beta']) {
+    headers['anthropic-beta'] = req.headers['anthropic-beta'] as string
+  }
+
+  try {
+    const upstream = await fetch(upstreamUrl, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload),
+    })
+    res.status(upstream.status)
+    const ct = upstream.headers.get('content-type')
+    if (ct) res.setHeader('content-type', ct)
+    res.setHeader('cache-control', 'no-cache')
+    console.log(
+      `[askai:${reqId}] proxy -> ${sub} status=${upstream.status} model=${payload?.model} stream=${!!payload?.stream}`,
+    )
+    if (!upstream.body) {
+      res.send(await upstream.text())
+      return
+    }
+    const reader = upstream.body.getReader()
+    req.on('close', () => {
+      try {
+        void reader.cancel()
+      } catch {
+        /* noop */
+      }
+    })
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      res.write(Buffer.from(value))
+    }
+    res.end()
+  } catch (e: any) {
+    console.log(`[askai:${reqId}] proxy error ${e?.message}`)
+    if (!res.headersSent) {
+      res.status(502).json({
+        type: 'error',
+        error: { type: 'api_error', message: e?.message || 'proxy failed' },
+      })
+    } else {
+      res.end()
+    }
+  }
+})
 
 // ----------------------------------------------------------------------------
 // Salud / fallback
