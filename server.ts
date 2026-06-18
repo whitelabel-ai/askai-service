@@ -3,6 +3,7 @@ import cors from 'cors'
 import jwt from 'jsonwebtoken'
 import Anthropic from '@anthropic-ai/sdk'
 import { v4 as uuidv4 } from 'uuid'
+import { createHash } from 'node:crypto'
 
 const app = express()
 app.use(cors())
@@ -45,10 +46,19 @@ const BUILDER_MODEL = process.env.BUILDER_MODEL || ''
 // sólo se mintean tokens cuando el licenseCert coincide exactamente (cierra el
 // abuso si el servicio es alcanzable). Recomendado ADEMÁS de exponerlo sólo en la
 // red interna (sin ruta pública de Traefik).
-const EXPECTED_LICENSE_CERT = process.env.EXPECTED_LICENSE_CERT || ''
+// EXPECTED_LICENSE_CERT puede ser el cert completo (base64, case-sensitive) O su
+// sha256 (hex de 64 chars, más cómodo de pegar). Vacío = no se exige (recomendado red interna).
+const EXPECTED_LICENSE_CERT = (process.env.EXPECTED_LICENSE_CERT || '').trim()
+const EXPECTED_IS_HASH = /^[a-f0-9]{64}$/i.test(EXPECTED_LICENSE_CERT)
+function certSha256(s: string): string {
+  return createHash('sha256').update(s).digest('hex')
+}
 function licenseValid(licenseCert: unknown): boolean {
   if (typeof licenseCert !== 'string' || !licenseCert) return false
-  return EXPECTED_LICENSE_CERT ? licenseCert === EXPECTED_LICENSE_CERT : true
+  if (!EXPECTED_LICENSE_CERT) return true
+  return EXPECTED_IS_HASH
+    ? certSha256(licenseCert).toLowerCase() === EXPECTED_LICENSE_CERT.toLowerCase()
+    : licenseCert === EXPECTED_LICENSE_CERT
 }
 
 const anthropic = new Anthropic({ apiKey: ANTHROPIC_KEY })
@@ -208,6 +218,9 @@ function verifyAuth(req: express.Request, res: express.Response, next: express.N
 app.post('/auth/token', async (req, res) => {
   const reqId = (req as any).reqId || '-'
   const { licenseCert } = req.body || {}
+  if (typeof licenseCert === 'string' && licenseCert) {
+    console.log(`[askai:${reqId}] licenseCert sha256=${certSha256(licenseCert)}`)
+  }
   if (!licenseValid(licenseCert)) {
     console.log(`[askai:${reqId}] license rejected`)
     res.status(401).json({ code: 401, message: 'Unauthorized' })
