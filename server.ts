@@ -3,11 +3,32 @@ import cors from 'cors'
 import jwt from 'jsonwebtoken'
 import Anthropic from '@anthropic-ai/sdk'
 import { v4 as uuidv4 } from 'uuid'
-import { createHash } from 'node:crypto'
 
 const app = express()
 app.use(cors())
 app.use(express.json({ limit: '16mb' }))
+
+// Auth por secreto en la URL. Poné el secreto como primer segmento de la base:
+//   N8N_AI_ASSISTANT_BASE_URL=https://askai.whitelabel.lat/<SECRETO>
+// Soporta varias instancias de n8n: ASKAI_SECRETS es una lista separada por comas
+// (cada instancia puede usar su propio secreto). Vacío = sin secreto (red interna).
+// Va ANTES del logging para no registrar el secreto en los logs.
+const ASKAI_SECRETS = (process.env.ASKAI_SECRETS || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean)
+app.use((req, res, next) => {
+  if (!ASKAI_SECRETS.length) return next()
+  if (req.path === '/healthz' || req.path === '/') return next()
+  const m = req.url.match(/^\/([^/?#]+)([/?#].*)?$/)
+  const seg = m ? decodeURIComponent(m[1]) : ''
+  if (seg && ASKAI_SECRETS.includes(seg)) {
+    req.url = m![2] || '/'
+    return next()
+  }
+  res.status(401).json({ message: 'Unauthorized' })
+})
+
 app.use((req, res, next) => {
   const reqId = uuidv4().slice(0, 8)
   ;(req as any).reqId = reqId
@@ -41,24 +62,10 @@ const N8N_BASE_URL = (process.env.N8N_BASE_URL || 'https://automation.whitelabel
 // (p. ej. abaratar con haiku) seteá BUILDER_MODEL; por defecto se respeta el de n8n.
 const BUILDER_MODEL = process.env.BUILDER_MODEL || ''
 
-// Hardening del minteo de tokens. El proxy de Anthropic usa la API key real, así
-// que mintear un token == poder gastar la cuenta. Si seteás EXPECTED_LICENSE_CERT,
-// sólo se mintean tokens cuando el licenseCert coincide exactamente (cierra el
-// abuso si el servicio es alcanzable). Recomendado ADEMÁS de exponerlo sólo en la
-// red interna (sin ruta pública de Traefik).
-// EXPECTED_LICENSE_CERT puede ser el cert completo (base64, case-sensitive) O su
-// sha256 (hex de 64 chars, más cómodo de pegar). Vacío = no se exige (recomendado red interna).
-const EXPECTED_LICENSE_CERT = (process.env.EXPECTED_LICENSE_CERT || '').trim()
-const EXPECTED_IS_HASH = /^[a-f0-9]{64}$/i.test(EXPECTED_LICENSE_CERT)
-function certSha256(s: string): string {
-  return createHash('sha256').update(s).digest('hex')
-}
+// La autenticación real es el secreto en la URL (ASKAI_SECRETS, arriba). Acá sólo
+// validamos que el licenseCert venga presente (n8n siempre lo manda).
 function licenseValid(licenseCert: unknown): boolean {
-  if (typeof licenseCert !== 'string' || !licenseCert) return false
-  if (!EXPECTED_LICENSE_CERT) return true
-  return EXPECTED_IS_HASH
-    ? certSha256(licenseCert).toLowerCase() === EXPECTED_LICENSE_CERT.toLowerCase()
-    : licenseCert === EXPECTED_LICENSE_CERT
+  return typeof licenseCert === 'string' && !!licenseCert
 }
 
 const anthropic = new Anthropic({ apiKey: ANTHROPIC_KEY })
@@ -218,9 +225,6 @@ function verifyAuth(req: express.Request, res: express.Response, next: express.N
 app.post('/auth/token', async (req, res) => {
   const reqId = (req as any).reqId || '-'
   const { licenseCert } = req.body || {}
-  if (typeof licenseCert === 'string' && licenseCert) {
-    console.log(`[askai:${reqId}] licenseCert sha256=${certSha256(licenseCert)}`)
-  }
   if (!licenseValid(licenseCert)) {
     console.log(`[askai:${reqId}] license rejected`)
     res.status(401).json({ code: 401, message: 'Unauthorized' })
@@ -555,7 +559,8 @@ app.post('/v1/api-proxy/anthropic/*', async (req, res) => {
     return
   }
 
-  const sub = req.originalUrl.replace(/^\/v1\/api-proxy\/anthropic/, '') || '/v1/messages'
+  // req.url ya viene sin el prefijo de secreto (lo quita el middleware de auth).
+  const sub = req.url.replace(/^\/v1\/api-proxy\/anthropic/, '') || '/v1/messages'
   const upstreamUrl = `https://api.anthropic.com${sub}`
 
   const payload: any = { ...(req.body || {}) }
@@ -630,9 +635,9 @@ app.use((req, res) => {
   res.status(404).json({ code: 404, message: 'Not found', path: req.path })
 })
 app.listen(port, () => {
-  if (!EXPECTED_LICENSE_CERT) {
+  if (!ASKAI_SECRETS.length) {
     console.warn(
-      '[askai] WARN: EXPECTED_LICENSE_CERT no seteado — cualquier licenseCert mintea tokens. Exponé el servicio sólo en red interna o seteá EXPECTED_LICENSE_CERT.',
+      '[askai] WARN: ASKAI_SECRETS vacío — el servicio acepta cualquier llamada. Si es público, seteá ASKAI_SECRETS y usá la URL con el secreto.',
     )
   }
 })
