@@ -47,6 +47,12 @@ app.use((req, res, next) => {
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret'
 const ANTHROPIC_KEY = process.env.N8N_AI_ANTHROPIC_KEY || process.env.ANTHROPIC_API_KEY || ''
 const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5'
+// Proveedor LLM (formato Anthropic). Default = Anthropic. Para un gateway
+// compatible-Anthropic (ej. OpenCode Zen: https://opencode.ai/zen) cambiá esta env
+// + la key (N8N_AI_ANTHROPIC_KEY) + los modelos (ANTHROPIC_MODEL/BUILDER_MODEL).
+// El gateway debe aceptar header x-api-key y exponer {base}/v1/messages.
+// OJO: NO sirve para gateways sólo-OpenAI (DeepSeek/Kimi/Grok) — eso necesita traducción.
+const LLM_BASE_URL = (process.env.LLM_BASE_URL || 'https://api.anthropic.com').replace(/\/+$/, '')
 // Firecrawl self-hosted: búsqueda + scrape de páginas a markdown limpio.
 // Si lo movés de server, sólo cambiás esta env y listo.
 const FIRECRAWL_URL = (process.env.FIRECRAWL_URL || 'https://firecrawl.lab.whitelabel.lat').replace(
@@ -68,7 +74,7 @@ function licenseValid(licenseCert: unknown): boolean {
   return typeof licenseCert === 'string' && !!licenseCert
 }
 
-const anthropic = new Anthropic({ apiKey: ANTHROPIC_KEY })
+const anthropic = new Anthropic({ apiKey: ANTHROPIC_KEY, baseURL: LLM_BASE_URL })
 const suggestionsStore = new Map<
   string,
   { sessionId: string; proposed: string; original?: string }
@@ -577,7 +583,7 @@ app.post('/v1/api-proxy/anthropic/*', async (req, res) => {
 
   // req.url ya viene sin el prefijo de secreto (lo quita el middleware de auth).
   const sub = req.url.replace(/^\/v1\/api-proxy\/anthropic/, '') || '/v1/messages'
-  const upstreamUrl = `https://api.anthropic.com${sub}`
+  const upstreamUrl = `${LLM_BASE_URL}${sub}`
 
   const payload: any = { ...(req.body || {}) }
   if (BUILDER_MODEL && payload && typeof payload === 'object' && 'model' in payload) {
