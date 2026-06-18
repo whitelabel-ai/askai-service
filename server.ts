@@ -40,6 +40,17 @@ const N8N_BASE_URL = (process.env.N8N_BASE_URL || 'https://automation.whitelabel
 // (p. ej. abaratar con haiku) seteá BUILDER_MODEL; por defecto se respeta el de n8n.
 const BUILDER_MODEL = process.env.BUILDER_MODEL || ''
 
+// Hardening del minteo de tokens. El proxy de Anthropic usa la API key real, así
+// que mintear un token == poder gastar la cuenta. Si seteás EXPECTED_LICENSE_CERT,
+// sólo se mintean tokens cuando el licenseCert coincide exactamente (cierra el
+// abuso si el servicio es alcanzable). Recomendado ADEMÁS de exponerlo sólo en la
+// red interna (sin ruta pública de Traefik).
+const EXPECTED_LICENSE_CERT = process.env.EXPECTED_LICENSE_CERT || ''
+function licenseValid(licenseCert: unknown): boolean {
+  if (typeof licenseCert !== 'string' || !licenseCert) return false
+  return EXPECTED_LICENSE_CERT ? licenseCert === EXPECTED_LICENSE_CERT : true
+}
+
 const anthropic = new Anthropic({ apiKey: ANTHROPIC_KEY })
 const suggestionsStore = new Map<
   string,
@@ -197,9 +208,9 @@ function verifyAuth(req: express.Request, res: express.Response, next: express.N
 app.post('/auth/token', async (req, res) => {
   const reqId = (req as any).reqId || '-'
   const { licenseCert } = req.body || {}
-  if (!licenseCert) {
-    console.log(`[askai:${reqId}] missing licenseCert`)
-    res.status(400).json({ code: 400, message: 'licenseCert required' })
+  if (!licenseValid(licenseCert)) {
+    console.log(`[askai:${reqId}] license rejected`)
+    res.status(401).json({ code: 401, message: 'Unauthorized' })
     return
   }
   const accessToken = jwt.sign({ sub: 'n8n', aud: 'ai-assistant', licenseCert }, JWT_SECRET, {
@@ -482,8 +493,8 @@ app.post('/ai/chat/apply-suggestion', verifyAuth, applySuggestion)
 app.post('/v1/builder/api-proxy-token', (req, res) => {
   const reqId = (req as any).reqId || '-'
   const { licenseCert } = req.body || {}
-  if (!licenseCert) {
-    res.status(400).json({ message: 'licenseCert required' })
+  if (!licenseValid(licenseCert)) {
+    res.status(401).json({ message: 'Unauthorized' })
     return
   }
   const accessToken = jwt.sign({ sub: 'builder', aud: 'api-proxy' }, JWT_SECRET, { expiresIn: '1h' })
@@ -493,8 +504,15 @@ app.post('/v1/builder/api-proxy-token', (req, res) => {
 
 // Créditos: stub generoso (uso personal). Si querés cuota real, calculala acá.
 const BUILDER_CREDITS = { creditsQuota: 999999, creditsClaimed: 0 }
-app.post('/v1/builder/usage', (_req, res) => res.json(BUILDER_CREDITS))
-app.post('/v1/builder/success', (_req, res) => res.json(BUILDER_CREDITS))
+function builderCredits(req: express.Request, res: express.Response) {
+  if (!licenseValid((req.body || {}).licenseCert)) {
+    res.status(401).json({ message: 'Unauthorized' })
+    return
+  }
+  res.json(BUILDER_CREDITS)
+}
+app.post('/v1/builder/usage', builderCredits)
+app.post('/v1/builder/success', builderCredits)
 
 // Tracing LangSmith: no-op (no debe bloquear la generación).
 app.use('/v1/api-proxy/langsmith', (_req, res) => {
@@ -598,4 +616,10 @@ app.get('/', (_req, res) => {
 app.use((req, res) => {
   res.status(404).json({ code: 404, message: 'Not found', path: req.path })
 })
-app.listen(port, () => {})
+app.listen(port, () => {
+  if (!EXPECTED_LICENSE_CERT) {
+    console.warn(
+      '[askai] WARN: EXPECTED_LICENSE_CERT no seteado — cualquier licenseCert mintea tokens. Exponé el servicio sólo en red interna o seteá EXPECTED_LICENSE_CERT.',
+    )
+  }
+})
