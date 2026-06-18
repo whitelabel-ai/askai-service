@@ -309,7 +309,16 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
     return
   }
   if (!ANTHROPIC_KEY) {
-    res.status(500).json({ code: 500, message: 'Service misconfigured: ANTHROPIC key missing' })
+    res.json({
+      sessionId,
+      messages: [
+        {
+          role: 'assistant',
+          type: 'message',
+          text: '⚠️ El asistente no tiene una API key de Anthropic configurada. Revisá la variable N8N_AI_ANTHROPIC_KEY del servicio.',
+        },
+      ],
+    })
     return
   }
 
@@ -463,12 +472,19 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
     res.json({ sessionId, messages })
   } catch (e: any) {
     const msg = e?.message || 'Chat failed'
-    const status = e?.status || e?.statusCode || 500
-    res.status(status === 401 ? 401 : 200).json({
+    console.log(`[askai:${reqId}] chat error ${msg}`)
+    // SIEMPRE 200 + tipo 'message': el chat de soporte no renderiza type:'error'
+    // y propagar el 401 del LLM confunde a n8n (spinner colgado). Así el usuario VE el error.
+    res.json({
       sessionId,
-      messages: [{ role: 'assistant', type: 'error', content: msg }],
+      messages: [
+        {
+          role: 'assistant',
+          type: 'message',
+          text: `⚠️ No pude generar la respuesta. ${msg}`,
+        },
+      ],
     })
-    console.log(`[askai:${reqId}] chat error status=${status} message=${msg}`)
   }
 })
 
