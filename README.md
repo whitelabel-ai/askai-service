@@ -48,7 +48,14 @@ También se exponen rutas alternativas por compatibilidad:
 ## Variables de Entorno
 
 - `N8N_AI_ANTHROPIC_KEY` o `ANTHROPIC_API_KEY`: clave de Anthropic.
-- `ANTHROPIC_MODEL`: modelo, por ejemplo `claude-3-5-sonnet-20241022`.
+- `ANTHROPIC_MODEL`: modelo del chat/Ask AI (default `claude-haiku-4-5`).
+- `BUILDER_MODEL`: fuerza el modelo del AI Builder (default: se respeta el que manda n8n).
+- `BUILDER_ENABLED`: `false`/`0`/`no`/`off` apaga el AI Builder ("Build with AI") sin
+  afectar el chat ni Ask AI. n8n muestra "0/100 créditos" y deshabilita el envío.
+- `LLM_BASE_URL`: gateway compatible-Anthropic (default `https://api.anthropic.com`).
+- `ASKAI_SECRETS`: lista separada por comas de secretos de URL (multi-instancia).
+- `FIRECRAWL_URL`: instancia Firecrawl para grounding (default `https://firecrawl.lab.whitelabel.lat`).
+- `N8N_BASE_URL`: instancia n8n para los links de "Importar plantilla".
 - `JWT_SECRET`: secreto para firmar `accessToken`.
 - `PORT`: puerto del servicio (default `8080`).
 

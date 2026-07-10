@@ -67,6 +67,10 @@ const N8N_BASE_URL = (process.env.N8N_BASE_URL || 'https://automation.whitelabel
 // El AI Builder de n8n fija el modelo (claude-sonnet-4-5). Para forzar otro
 // (p. ej. abaratar con haiku) seteá BUILDER_MODEL; por defecto se respeta el de n8n.
 const BUILDER_MODEL = process.env.BUILDER_MODEL || ''
+// Kill-switch del AI Builder ("Build with AI"): BUILDER_ENABLED=false lo apaga
+// sin tocar el chat del asistente ni Ask AI. Se reporta cuota agotada y la UI
+// de n8n sola muestra el banner de créditos y deshabilita el envío.
+const BUILDER_ENABLED = !/^(0|false|no|off)$/i.test(process.env.BUILDER_ENABLED || '')
 
 // La autenticación real es el secreto en la URL (ASKAI_SECRETS, arriba). Acá sólo
 // validamos que el licenseCert venga presente (n8n siempre lo manda).
@@ -596,19 +600,27 @@ app.post('/v1/builder/api-proxy-token', (req, res) => {
     res.status(401).json({ message: 'Unauthorized' })
     return
   }
+  if (!BUILDER_ENABLED) {
+    console.log(`[askai:${reqId}] builder disabled - token denied`)
+    res.status(402).json({ message: 'AI Builder is disabled on this instance (no credits)' })
+    return
+  }
   const accessToken = jwt.sign({ sub: 'builder', aud: 'api-proxy' }, JWT_SECRET, { expiresIn: '1h' })
   console.log(`[askai:${reqId}] issued builder proxy token`)
   res.json({ accessToken, tokenType: 'Bearer' })
 })
 
-// Créditos: stub generoso (uso personal). Si querés cuota real, calculala acá.
-const BUILDER_CREDITS = { creditsQuota: 999999, creditsClaimed: 0 }
+// Créditos: -1 = ilimitado (la UI de n8n oculta el contador). Con el builder
+// apagado se reporta cuota agotada: banner "0/100 credits left" + envío
+// deshabilitado, todo manejado nativamente por n8n.
+const BUILDER_CREDITS = { creditsQuota: -1, creditsClaimed: 0 }
+const BUILDER_CREDITS_EXHAUSTED = { creditsQuota: 100, creditsClaimed: 100 }
 function builderCredits(req: express.Request, res: express.Response) {
   if (!licenseValid((req.body || {}).licenseCert)) {
     res.status(401).json({ message: 'Unauthorized' })
     return
   }
-  res.json(BUILDER_CREDITS)
+  res.json(BUILDER_ENABLED ? BUILDER_CREDITS : BUILDER_CREDITS_EXHAUSTED)
 }
 app.post('/v1/builder/usage', builderCredits)
 app.post('/v1/builder/success', builderCredits)
@@ -630,6 +642,14 @@ app.post('/v1/api-proxy/anthropic/*', async (req, res) => {
     res.status(401).json({
       type: 'error',
       error: { type: 'authentication_error', message: 'Invalid proxy token' },
+    })
+    return
+  }
+  // Backstop: un token emitido antes de apagar el builder vive 1h.
+  if (!BUILDER_ENABLED) {
+    res.status(403).json({
+      type: 'error',
+      error: { type: 'permission_error', message: 'AI Builder is disabled on this instance' },
     })
     return
   }
