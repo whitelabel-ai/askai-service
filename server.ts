@@ -80,6 +80,10 @@ const suggestionsStore = new Map<
   { sessionId: string; proposed: string; original?: string }
 >()
 
+// Separador de chunks del chat streaming. DEBE coincidir con STREAM_SEPARATOR
+// del frontend de n8n (packages/frontend/@n8n/rest-api-client/src/utils.ts).
+const STREAM_SEPARATOR = '⧉⇋⇋➽⌑⧉§§\n'
+
 // ----------------------------------------------------------------------------
 // LLM — único punto de contacto. Cambiar de modelo = env ANTHROPIC_MODEL
 // (p. ej. claude-sonnet-4-6 para respuestas más finas en algo puntual).
@@ -419,7 +423,52 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
       ? `${text}\n\n--- DOCUMENTACIÓN n8n (fuente de verdad) ---\n${grounding}`
       : text
 
-    const raw = await complete(system, userMsg, 2048)
+    // ------------------------------------------------------------------
+    // Streaming JSON-lines: cada chunk es un SNAPSHOT acumulativo
+    // { sessionId, messages } — el frontend reemplaza (no concatena) los
+    // mensajes del assistant en cada chunk, por eso se re-emite todo.
+    // ------------------------------------------------------------------
+    res.status(200)
+    res.setHeader('content-type', 'application/json-lines; charset=utf-8')
+    res.setHeader('cache-control', 'no-cache')
+    // Evita que un reverse proxy (nginx) bufferee y aplaste el stream.
+    res.setHeader('x-accel-buffering', 'no')
+    const writeSnapshot = (messages: any[]) => {
+      res.write(JSON.stringify({ sessionId, messages }) + STREAM_SEPARATOR)
+    }
+
+    const stream = anthropic.messages.stream({
+      model: ANTHROPIC_MODEL,
+      max_tokens: 2048,
+      system,
+      messages: [{ role: 'user', content: userMsg }],
+    })
+    let clientGone = false
+    const onClose = () => {
+      clientGone = true
+      try {
+        stream.abort()
+      } catch {
+        /* noop */
+      }
+    }
+    res.on('close', onClose)
+
+    // Mientras genera: un único mensaje de texto que crece. Throttle porque
+    // cada chunk viaja completo (snapshot) — sin él sería O(n²) bytes.
+    let lastEmit = 0
+    stream.on('text', (_delta, snapshot) => {
+      if (clientGone) return
+      const now = Date.now()
+      if (now - lastEmit < 150) return
+      lastEmit = now
+      writeSnapshot([{ role: 'assistant', type: 'message', text: snapshot }])
+    })
+
+    const finalMsg = await stream.finalMessage()
+    res.off('close', onClose)
+    if (clientGone) return
+    const raw = finalMsg.content?.map((c: any) => ('text' in c ? c.text : '')).join('\n') || ''
     const { blocks, codeMatches } = parseAnswerToBlocks(raw)
 
     const messages: any[] = [...blocks]
@@ -475,22 +524,33 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
     if (last && !last.quickReplies) last.quickReplies = quickReplies
 
     console.log(`[askai:${reqId}] respond messages=${messages.length} sources=${sources.length}`)
-    res.json({ sessionId, messages })
+    // Snapshot final: reemplaza el texto plano streameado por los bloques
+    // parseados + code-diff + fuentes + quickReplies.
+    writeSnapshot(messages)
+    res.end()
   } catch (e: any) {
     const msg = e?.message || 'Chat failed'
     console.log(`[askai:${reqId}] chat error ${msg}`)
     // SIEMPRE 200 + tipo 'message': el chat de soporte no renderiza type:'error'
     // y propagar el 401 del LLM confunde a n8n (spinner colgado). Así el usuario VE el error.
-    res.json({
-      sessionId,
-      messages: [
-        {
-          role: 'assistant',
-          type: 'message',
-          text: `⚠️ No pude generar la respuesta. ${msg}`,
-        },
-      ],
-    })
+    const fallback = [
+      {
+        role: 'assistant',
+        type: 'message',
+        text: `⚠️ No pude generar la respuesta. ${msg}`,
+      },
+    ]
+    if (!res.headersSent) {
+      res.json({ sessionId, messages: fallback })
+    } else if (!res.writableEnded) {
+      // Ya estábamos streameando: el error va como último chunk del stream.
+      try {
+        res.write(JSON.stringify({ sessionId, messages: fallback }) + STREAM_SEPARATOR)
+      } catch {
+        /* socket cerrado */
+      }
+      res.end()
+    }
   }
 })
 
