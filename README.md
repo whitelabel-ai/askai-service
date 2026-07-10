@@ -52,6 +52,8 @@ También se exponen rutas alternativas por compatibilidad:
 - `BUILDER_MODEL`: fuerza el modelo del AI Builder (default: se respeta el que manda n8n).
 - `BUILDER_ENABLED`: `false`/`0`/`no`/`off` apaga el AI Builder ("Build with AI") sin
   afectar el chat ni Ask AI. n8n muestra "0/100 créditos" y deshabilita el envío.
+- `CHAT_STREAMING`: `true`/`1`/`yes`/`on` activa el streaming progresivo del chat
+  (JSON-lines). Apagado por defecto: respuesta bufferada clásica (más estable).
 - `LLM_BASE_URL`: gateway compatible-Anthropic (default `https://api.anthropic.com`).
 - `ASKAI_SECRETS`: lista separada por comas de secretos de URL (multi-instancia).
 - `FIRECRAWL_URL`: instancia Firecrawl para grounding (default `https://firecrawl.lab.whitelabel.lat`).

@@ -71,6 +71,10 @@ const BUILDER_MODEL = process.env.BUILDER_MODEL || ''
 // sin tocar el chat del asistente ni Ask AI. Se reporta cuota agotada y la UI
 // de n8n sola muestra el banner de créditos y deshabilita el envío.
 const BUILDER_ENABLED = !/^(0|false|no|off)$/i.test(process.env.BUILDER_ENABLED || '')
+// Streaming del chat: OPT-IN. CHAT_STREAMING=true emite la respuesta
+// progresivamente (JSON-lines); apagado usa la respuesta bufferada clásica
+// (una sola JSON), que es la vía estable mientras validamos streaming en prod.
+const CHAT_STREAMING = /^(1|true|yes|on)$/i.test(process.env.CHAT_STREAMING || '')
 
 // La autenticación real es el secreto en la URL (ASKAI_SECRETS, arriba). Acá sólo
 // validamos que el licenseCert venga presente (n8n siempre lo manda).
@@ -428,51 +432,58 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
       : text
 
     // ------------------------------------------------------------------
-    // Streaming JSON-lines: cada chunk es un SNAPSHOT acumulativo
-    // { sessionId, messages } — el frontend reemplaza (no concatena) los
-    // mensajes del assistant en cada chunk, por eso se re-emite todo.
+    // Generación: bufferada (default, estable) o streaming si CHAT_STREAMING.
+    // En streaming cada chunk es un SNAPSHOT acumulativo { sessionId, messages }
+    // — el frontend reemplaza (no concatena) los mensajes del assistant en
+    // cada chunk, por eso se re-emite todo.
     // ------------------------------------------------------------------
-    res.status(200)
-    res.setHeader('content-type', 'application/json-lines; charset=utf-8')
-    res.setHeader('cache-control', 'no-cache')
-    // Evita que un reverse proxy (nginx) bufferee y aplaste el stream.
-    res.setHeader('x-accel-buffering', 'no')
     const writeSnapshot = (messages: any[]) => {
       res.write(JSON.stringify({ sessionId, messages }) + STREAM_SEPARATOR)
     }
 
-    const stream = anthropic.messages.stream({
-      model: ANTHROPIC_MODEL,
-      max_tokens: 2048,
-      system,
-      messages: [{ role: 'user', content: userMsg }],
-    })
-    let clientGone = false
-    const onClose = () => {
-      clientGone = true
-      try {
-        stream.abort()
-      } catch {
-        /* noop */
+    let raw = ''
+    if (!CHAT_STREAMING) {
+      raw = await complete(system, userMsg, 2048)
+    } else {
+      res.status(200)
+      res.setHeader('content-type', 'application/json-lines; charset=utf-8')
+      res.setHeader('cache-control', 'no-cache')
+      // Evita que un reverse proxy (nginx) bufferee y aplaste el stream.
+      res.setHeader('x-accel-buffering', 'no')
+
+      const stream = anthropic.messages.stream({
+        model: ANTHROPIC_MODEL,
+        max_tokens: 2048,
+        system,
+        messages: [{ role: 'user', content: userMsg }],
+      })
+      let clientGone = false
+      const onClose = () => {
+        clientGone = true
+        try {
+          stream.abort()
+        } catch {
+          /* noop */
+        }
       }
-    }
-    res.on('close', onClose)
+      res.on('close', onClose)
 
-    // Mientras genera: un único mensaje de texto que crece. Throttle porque
-    // cada chunk viaja completo (snapshot) — sin él sería O(n²) bytes.
-    let lastEmit = 0
-    stream.on('text', (_delta, snapshot) => {
+      // Mientras genera: un único mensaje de texto que crece. Throttle porque
+      // cada chunk viaja completo (snapshot) — sin él sería O(n²) bytes.
+      let lastEmit = 0
+      stream.on('text', (_delta, snapshot) => {
+        if (clientGone) return
+        const now = Date.now()
+        if (now - lastEmit < 150) return
+        lastEmit = now
+        writeSnapshot([{ role: 'assistant', type: 'message', text: snapshot }])
+      })
+
+      const finalMsg = await stream.finalMessage()
+      res.off('close', onClose)
       if (clientGone) return
-      const now = Date.now()
-      if (now - lastEmit < 150) return
-      lastEmit = now
-      writeSnapshot([{ role: 'assistant', type: 'message', text: snapshot }])
-    })
-
-    const finalMsg = await stream.finalMessage()
-    res.off('close', onClose)
-    if (clientGone) return
-    const raw = finalMsg.content?.map((c: any) => ('text' in c ? c.text : '')).join('\n') || ''
+      raw = finalMsg.content?.map((c: any) => ('text' in c ? c.text : '')).join('\n') || ''
+    }
     const { blocks, codeMatches } = parseAnswerToBlocks(raw)
 
     const messages: any[] = [...blocks]
@@ -528,10 +539,14 @@ app.post('/v1/chat', verifyAuth, async (req, res) => {
     if (last && !last.quickReplies) last.quickReplies = quickReplies
 
     console.log(`[askai:${reqId}] respond messages=${messages.length} sources=${sources.length}`)
-    // Snapshot final: reemplaza el texto plano streameado por los bloques
-    // parseados + code-diff + fuentes + quickReplies.
-    writeSnapshot(messages)
-    res.end()
+    if (CHAT_STREAMING) {
+      // Snapshot final: reemplaza el texto plano streameado por los bloques
+      // parseados + code-diff + fuentes + quickReplies.
+      writeSnapshot(messages)
+      res.end()
+    } else {
+      res.json({ sessionId, messages })
+    }
   } catch (e: any) {
     const msg = e?.message || 'Chat failed'
     console.log(`[askai:${reqId}] chat error ${msg}`)
